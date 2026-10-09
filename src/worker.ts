@@ -152,13 +152,16 @@ export async function runWorker(
     log(`[bigeon] task ${note.id} received:\n${note.text.trim()}`);
 
     // A result already pushed means an earlier run crashed before marking the task seen.
-    if (fs.existsSync(path.join(commsDir(projectDir), 'results', `${note.id}.md`))) {
+    const resultPath = path.join(commsDir(projectDir), 'results', `${note.id}.md`);
+    const existing = fs.existsSync(resultPath) ? /^Status: (PASS|FAIL)$/m.exec(fs.readFileSync(resultPath, 'utf8')) : null;
+    if (existing) {
       markNoteSeen(projectDir, 'task', note);
       fs.rmSync(markerPath, { force: true });
-      log(`[bigeon] task ${note.id} already has a result, skipping`);
+      log(`[bigeon] task ${note.id} already has a ${existing[1]} result, skipping`);
       if (options.once) return 0;
       continue;
     }
+    if (fs.existsSync(resultPath)) log(`[bigeon] task ${note.id} has an incomplete result, doing it again`);
     // Only after a real interruption (marker for this same task): stash leftovers, never delete them.
     if (readMarkerId(markerPath) === note.id && git(['status', '--porcelain'], projectDir).out) {
       log(`[bigeon] stashing leftovers from interrupted task ${note.id} (git stash list to recover)`);

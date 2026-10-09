@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cli, run, makeClone, setupRemote } from './helpers.ts';
+import { spawn } from 'node:child_process';
+import { cli, run, makeClone, setupRemote, killTree } from './helpers.ts';
 
 const HANG = "setInterval(()=>{},1000);\n";
 
@@ -27,18 +28,28 @@ function setupPair(prefix: string): { root: string; foreman: string; worker: str
 }
 
 // Simulated crash: the worker is killed before it can report anything.
-function crashWorker(worker: string, foreman: string): void {
-  run('node', [cli, 'worker', '--once'], worker, 1000);
+async function crashWorker(worker: string, foreman: string): Promise<void> {
+  const child = spawn('node', [cli, 'worker', '--once'], { cwd: worker, detached: process.platform !== 'win32', stdio: 'ignore' });
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  const started = path.join(worker, 'started.txt');
+  const deadline = Date.now() + 20000;
+  while (!fs.existsSync(started) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const appeared = fs.existsSync(started);
+  killTree(child.pid as number);
+  await exited;
+  assert.equal(appeared, true, 'agent never wrote started.txt');
   assert.equal(run('node', [cli, 'watch', 'results', '--once'], foreman).status, 2);
 }
 
-test('a task interrupted mid-run is done again on the next start', () => {
+test('a task interrupted mid-run is done again on the next start', async () => {
   const { foreman, worker } = setupPair('bigeon-recover-');
   fs.writeFileSync(path.join(worker, 'check.js'), "process.exit(require('fs').existsSync('done.txt')?0:1);");
   fs.writeFileSync(path.join(worker, 'agent.js'), `require('fs').writeFileSync('started.txt','x');\n${HANG}`);
   assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: write done.txt'], foreman).status, 0);
 
-  crashWorker(worker, foreman);
+  await crashWorker(worker, foreman);
 
   fs.writeFileSync(path.join(worker, 'agent.js'), "require('fs').writeFileSync('done.txt','x');");
   const again = run('node', [cli, 'worker', '--once'], worker);
@@ -48,7 +59,7 @@ test('a task interrupted mid-run is done again on the next start', () => {
   assert.match(result.stdout, /Status: PASS/);
 });
 
-test('leftovers from an interrupted run are cleaned before the retry', () => {
+test('leftovers from an interrupted run are cleaned before the retry', async () => {
   const { foreman, worker } = setupPair('bigeon-clean-');
   fs.writeFileSync(path.join(worker, 'a.txt'), 'original');
   run('git', ['add', 'a.txt'], worker);
@@ -56,11 +67,11 @@ test('leftovers from an interrupted run are cleaned before the retry', () => {
   fs.writeFileSync(path.join(worker, 'check.js'), "process.exit(require('fs').existsSync('ok.txt')?0:1);");
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
-    `const fs=require('fs');fs.writeFileSync('a.txt','half');fs.writeFileSync('junk.txt','x');\n${HANG}`,
+    `const fs=require('fs');fs.writeFileSync('a.txt','half');fs.writeFileSync('junk.txt','x');fs.writeFileSync('started.txt','x');\n${HANG}`,
   );
   assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: write ok.txt'], foreman).status, 0);
 
-  crashWorker(worker, foreman);
+  await crashWorker(worker, foreman);
 
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
@@ -83,8 +94,21 @@ test('a task that already has a result is not redone', () => {
 
   const done = run('node', [cli, 'worker', '--once'], worker);
   assert.equal(done.status, 0, done.stderr + done.stdout);
-  assert.match(done.stdout, /already has a result/);
+  assert.match(done.stdout, /already has a PASS result/);
   assert.equal(fs.existsSync(path.join(worker, 'ran.txt')), false);
+});
+
+test('a task with an incomplete result is done again', () => {
+  const { foreman, worker } = setupPair('bigeon-incomplete-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), "require('fs').writeFileSync('ran.txt','x');");
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: write ran.txt'], foreman).status, 0);
+  assert.equal(run('node', [cli, 'send', 'result', '001', '--text', 'half written'], foreman).status, 0);
+
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  assert.equal(fs.existsSync(path.join(worker, 'ran.txt')), true);
+  assert.match(out.stdout, /incomplete result/);
 });
 
 test('uncommitted work is left alone when nothing was interrupted', () => {
