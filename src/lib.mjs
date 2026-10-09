@@ -11,6 +11,8 @@ export const DEFAULT_CONFIG = {
   commsBranch: 'agent-comms',
   remote: 'origin',
   checkTimeoutSeconds: 300,
+  workerCommand: '',
+  workerTimeoutSeconds: 900,
 };
 
 export const CONFIG_FILE = 'bigeon.config.json';
@@ -83,6 +85,13 @@ export function formatCheck(checkResult) {
   const reason = checkResult.timedOut ? 'timed out' : `exit code ${checkResult.exitCode}`;
   const lines = [`FAIL (${reason})`, ...checkResult.errors];
   if (checkResult.hiddenLineCount > 0) lines.push(`... ${checkResult.hiddenLineCount} more lines hidden`);
+  return lines.join('\n');
+}
+
+export function resultNoteText(projectDir, checkResult, tries, summary) {
+  const lines = [`Status: ${checkResult.status}`, `Commit: ${currentCommit(projectDir)}`, `Tries: ${tries}`];
+  if (checkResult.status === 'FAIL') lines.push('Errors:', formatCheck(checkResult));
+  if (summary) lines.push(`Summary: ${summary}`);
   return lines.join('\n');
 }
 

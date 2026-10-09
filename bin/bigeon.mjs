@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Bigeon command line. Run from inside the project you want to work on.
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
-  loadConfig, runCheck, formatCheck, sleep, currentCommit, initProject,
+  loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject,
 } from '../src/lib.mjs';
 import { sendNote, findNewNote } from '../src/comms.mjs';
+import { runWorker } from '../src/worker.mjs';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
 
@@ -15,6 +17,9 @@ Usage (run inside your project):
   bigeon send result ID [--file F | --text T]
   bigeon report ID [--tries N] [--summary T]
                                            worker: run the check, write the result note, push it
+  bigeon worker [--once]                   worker: loop forever. Wait for a task, run workerCommand
+                                           (your agent, e.g. the Cline CLI) with the task on stdin,
+                                           run the check, report. Needs workerCommand in the config.
   bigeon watch tasks|results [--once] [--timeout MINUTES]
                                            wait for a new note, print it, exit 0
                                            (exit 2 = nothing new, so the model is not woken)
@@ -82,16 +87,15 @@ function main() {
     const [id] = positional;
     if (!id) throw new Error('report needs the task id, e.g. bigeon report 001');
     const result = runCheck(projectDir, config);
-    const lines = [
-      `Status: ${result.status}`,
-      `Commit: ${currentCommit(projectDir)}`,
-      `Tries: ${typeof flags.tries === 'string' ? flags.tries : '1'}`,
-    ];
-    if (result.status === 'FAIL') lines.push('Errors:', formatCheck(result));
-    if (typeof flags.summary === 'string') lines.push(`Summary: ${flags.summary}`);
-    sendNote(projectDir, config, 'result', id, lines.join('\n'));
+    const tries = typeof flags.tries === 'string' ? flags.tries : '1';
+    const summary = typeof flags.summary === 'string' ? flags.summary : '';
+    sendNote(projectDir, config, 'result', id, resultNoteText(projectDir, result, tries, summary));
     console.log(`Reported ${result.status} for task ${id}`);
     return result.status === 'PASS' ? 0 : 1;
+  }
+
+  if (command === 'worker') {
+    return runWorker(projectDir, config, fileURLToPath(import.meta.url), { once: Boolean(flags.once) });
   }
 
   if (command === 'watch') {
