@@ -2,13 +2,20 @@
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
 import { spawn } from 'node:child_process';
+import type { Config, WorkerOptions, AgentRun, CheckResult } from './types.ts';
 import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
 import { findNewNote, sendNote } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
-export function workerPrompt(bigeonPath, config, id, taskText, previousFailure) {
+export function workerPrompt(
+  bigeonPath: string,
+  config: Config,
+  id: string,
+  taskText: string,
+  previousFailure: string,
+): string {
   const lines = [
     `You are the worker in a Bigeon foreman loop. Task ${id} has arrived.`,
     '',
@@ -36,8 +43,8 @@ export function workerPrompt(bigeonPath, config, id, taskText, previousFailure) 
 }
 
 // Run the agent, show its output live, and keep the last lines for the result note.
-function runAgent(projectDir, config, prompt) {
-  return new Promise((resolve) => {
+function runAgent(projectDir: string, config: Config, prompt: string): Promise<AgentRun> {
+  return new Promise<AgentRun>((resolve) => {
     const child = spawn(config.workerCommand, { cwd: projectDir, shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let captured = '';
     let timedOut = false;
@@ -45,13 +52,13 @@ function runAgent(projectDir, config, prompt) {
       timedOut = true;
       child.kill();
     }, config.workerTimeoutSeconds * 1000);
-    const forward = (stream, target) => stream.on('data', (chunk) => {
+    const forward = (stream: NodeJS.ReadableStream, target: NodeJS.WritableStream) => stream.on('data', (chunk: Buffer | string) => {
       target.write(chunk);
       captured += chunk.toString();
     });
     forward(child.stdout, process.stdout);
     forward(child.stderr, process.stderr);
-    child.on('error', (error) => {
+    child.on('error', (error: Error) => {
       captured += `\n${error.message}\n`;
     });
     child.on('close', (code) => {
@@ -63,12 +70,17 @@ function runAgent(projectDir, config, prompt) {
   });
 }
 
-export function agentTail(output) {
+export function agentTail(output: string): string[] {
   const lines = output.replace(ANSI_PATTERN, '').split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   return lines.slice(-AGENT_TAIL_LINES).map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
 }
 
-export async function runWorker(projectDir, config, bigeonPath, options = {}) {
+export async function runWorker(
+  projectDir: string,
+  config: Config,
+  bigeonPath: string,
+  options: WorkerOptions = {},
+): Promise<number> {
   const log = options.log || console.log;
   if (!config.workerCommand) {
     throw new Error('No workerCommand set in bigeon.config.json (for example: cline --auto-approve true "Follow the instructions on stdin")');
@@ -86,9 +98,10 @@ export async function runWorker(projectDir, config, bigeonPath, options = {}) {
     announcedWaiting = false;
     log(`[bigeon] task ${note.id} received:\n${note.text.trim()}`);
 
-    let result = null;
+    // Assigned in the loop below (original code assumed maxTries >= 1).
+    let result!: CheckResult;
     let previousFailure = '';
-    let agentSaid = [];
+    let agentSaid: string[] = [];
     let exitText = '';
     let tries = 0;
     while (tries < config.maxTries) {
@@ -105,7 +118,7 @@ export async function runWorker(projectDir, config, bigeonPath, options = {}) {
     }
 
     const summary = `worker agent ${exitText}`;
-    const text = resultNoteText(projectDir, result, String(tries), summary, agentSaid);
+    const text = resultNoteText(projectDir, result, tries, summary, agentSaid);
     sendNote(projectDir, config, 'result', note.id, text);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;

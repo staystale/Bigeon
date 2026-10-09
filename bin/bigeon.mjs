@@ -6,7 +6,7 @@ import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
 } from '../src/lib.ts';
 import { sendNote, findNewNote } from '../src/comms.ts';
-import { runWorker } from '../src/worker.mjs';
+import { runWorker } from '../src/worker.ts';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
 
