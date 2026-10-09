@@ -1,7 +1,8 @@
 // Bigeon worker loop: wait for a task, hand it to the worker agent (visible in this terminal),
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
 import { findNewNote, sendNote, RemoteError } from './comms.ts';
@@ -42,15 +43,34 @@ export function workerPrompt(
   return lines.join('\n');
 }
 
+// Stop the child and everything it started (the shell wrapper alone is not enough).
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
+
 // Run the agent, show its output live, and keep the last lines for the result note.
 function runAgent(projectDir: string, config: Config, prompt: string): Promise<AgentRun> {
   return new Promise<AgentRun>((resolve) => {
-    const child = spawn(config.workerCommand, { cwd: projectDir, shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(config.workerCommand, {
+      cwd: projectDir,
+      shell: true,
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     let captured = '';
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      killTree(child);
     }, config.workerTimeoutSeconds * 1000);
     const forward = (stream: NodeJS.ReadableStream, target: NodeJS.WritableStream) => stream.on('data', (chunk: Buffer | string) => {
       target.write(chunk);
