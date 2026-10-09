@@ -7,6 +7,7 @@ import {
 } from '../src/lib.ts';
 import { sendNote, findNewNote } from '../src/comms.ts';
 import { runWorker } from '../src/worker.ts';
+import type { ParsedArguments, NoteKind } from '../src/types.ts';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
 
@@ -25,11 +26,11 @@ Usage (run inside your project):
                                            (exit 2 = nothing new, so the model is not woken)
 `;
 
-function parseArguments(argumentList) {
-  const positional = [];
-  const flags = {};
+function parseArguments(argumentList: string[]): ParsedArguments {
+  const positional: string[] = [];
+  const flags: ParsedArguments['flags'] = {};
   for (let index = 0; index < argumentList.length; index += 1) {
-    const argument = argumentList[index];
+    const argument = argumentList[index] as string; // index is within bounds
     if (argument.startsWith('--')) {
       const name = argument.slice(2);
       const next = argumentList[index + 1];
@@ -46,13 +47,13 @@ function parseArguments(argumentList) {
   return { positional, flags };
 }
 
-function readBody(flags) {
+function readBody(flags: ParsedArguments['flags']): string {
   if (typeof flags.text === 'string') return flags.text;
   if (typeof flags.file === 'string') return fs.readFileSync(flags.file, 'utf8');
   return fs.readFileSync(0, 'utf8');
 }
 
-async function main() {
+async function main(): Promise<number> {
   const projectDir = process.cwd();
   const [command, ...rest] = process.argv.slice(2);
   const { positional, flags } = parseArguments(rest);
@@ -80,6 +81,7 @@ async function main() {
 
   if (command === 'send') {
     const [kind, id] = positional;
+    if (kind !== 'task' && kind !== 'result') throw new Error('send needs "task" or "result"');
     const noteId = sendNote(projectDir, config, kind, id, readBody(flags));
     console.log(`Sent ${kind} ${noteId}`);
     return 0;
@@ -89,7 +91,7 @@ async function main() {
     const [id] = positional;
     if (!id) throw new Error('report needs the task id, e.g. bigeon report 001');
     const result = runCheck(projectDir, config);
-    const tries = typeof flags.tries === 'string' ? flags.tries : '1';
+    const tries = typeof flags.tries === 'string' ? Number(flags.tries) : 1;
     const summary = typeof flags.summary === 'string' ? flags.summary : '';
     sendNote(projectDir, config, 'result', id, resultNoteText(projectDir, result, tries, summary));
     console.log(`Reported ${result.status} for task ${id}`);
@@ -102,7 +104,7 @@ async function main() {
 
   if (command === 'watch') {
     const [target] = positional;
-    const kind = target === 'tasks' ? 'task' : target === 'results' ? 'result' : null;
+    const kind: NoteKind | null = target === 'tasks' ? 'task' : target === 'results' ? 'result' : null;
     if (!kind) throw new Error('watch needs "tasks" or "results"');
     const deadline = typeof flags.timeout === 'string' ? Date.now() + Number(flags.timeout) * 60000 : null;
     for (;;) {
@@ -123,6 +125,6 @@ async function main() {
 try {
   process.exitCode = await main();
 } catch (error) {
-  console.error(`bigeon: ${error.message}`);
+  console.error(`bigeon: ${(error as Error).message}`);
   process.exitCode = 1;
 }
