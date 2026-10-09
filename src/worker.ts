@@ -46,6 +46,17 @@ export function workerPrompt(
   return lines.join('\n');
 }
 
+// The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
+function readMarkerId(markerPath: string): string {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && 'id' in parsed && typeof parsed.id === 'string') return parsed.id;
+  } catch {
+    // missing or unreadable marker: treat as no interruption
+  }
+  return '';
+}
+
 // Stop the child and everything it started (the shell wrapper alone is not enough).
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
@@ -137,21 +148,24 @@ export async function runWorker(
       continue;
     }
     announcedWaiting = false;
+    const markerPath = path.join(projectDir, '.bigeon', 'in-progress.json');
     log(`[bigeon] task ${note.id} received:\n${note.text.trim()}`);
 
     // A result already pushed means an earlier run crashed before marking the task seen.
     if (fs.existsSync(path.join(commsDir(projectDir), 'results', `${note.id}.md`))) {
       markNoteSeen(projectDir, 'task', note);
+      fs.rmSync(markerPath, { force: true });
       log(`[bigeon] task ${note.id} already has a result, skipping`);
       if (options.once) return 0;
       continue;
     }
-    // Start clean: drop anything an interrupted run left in the working tree.
-    if (git(['status', '--porcelain'], projectDir).out) {
-      log('[bigeon] cleaning leftovers from an interrupted run');
-      git(['reset', '--hard', '--quiet'], projectDir);
-      git(['clean', '-fd', '--quiet'], projectDir);
+    // Only after a real interruption (marker for this same task): stash leftovers, never delete them.
+    if (readMarkerId(markerPath) === note.id && git(['status', '--porcelain'], projectDir).out) {
+      log(`[bigeon] stashing leftovers from interrupted task ${note.id} (git stash list to recover)`);
+      git(['stash', 'push', '--include-untracked', '--quiet', '-m', `bigeon: leftovers from interrupted task ${note.id}`], projectDir);
     }
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, JSON.stringify({ id: note.id }));
 
     // Assigned in the loop below (original code assumed maxTries >= 1).
     let result!: CheckResult;
@@ -189,6 +203,7 @@ export async function runWorker(
       }
     }
     markNoteSeen(projectDir, 'task', note);
+    fs.rmSync(markerPath, { force: true });
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
   }

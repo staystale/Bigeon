@@ -133,10 +133,13 @@ export function initProject(projectDir: string): string[] {
   }
   const ignorePath = path.join(projectDir, '.gitignore');
   const ignoreText = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, 'utf8') : '';
-  if (!ignoreText.split(/\r?\n/).includes(`${STATE_DIR}/`)) {
-    const separator = ignoreText && !ignoreText.endsWith('\n') ? '\n' : '';
-    fs.appendFileSync(ignorePath, `${separator}${STATE_DIR}/\n`);
-    created.push(`.gitignore (+${STATE_DIR}/)`);
+  const ignoreLines = ignoreText.split(/\r?\n/);
+  let separator = ignoreText && !ignoreText.endsWith('\n') ? '\n' : '';
+  for (const entry of [`${STATE_DIR}/`, CONFIG_FILE]) {
+    if (ignoreLines.includes(entry)) continue;
+    fs.appendFileSync(ignorePath, `${separator}${entry}\n`);
+    separator = '';
+    created.push(`.gitignore (+${entry})`);
   }
   return created;
 }
