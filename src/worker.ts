@@ -2,9 +2,9 @@
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
 import { spawn } from 'node:child_process';
-import type { Config, WorkerOptions, AgentRun, CheckResult } from './types.ts';
+import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
-import { findNewNote, sendNote } from './comms.ts';
+import { findNewNote, sendNote, RemoteError } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
@@ -86,8 +86,26 @@ export async function runWorker(
     throw new Error('No workerCommand set in bigeon.config.json (for example: cline --auto-approve true "Follow the instructions on stdin")');
   }
   let announcedWaiting = false;
+  let lastMessage = '';
   for (;;) {
-    const note = findNewNote(projectDir, config, 'task');
+    let note: Note | null = null;
+    try {
+      note = findNewNote(projectDir, config, 'task');
+      if (lastMessage) log('[bigeon] reconnected');
+      lastMessage = '';
+    } catch (error) {
+      if (!(error instanceof RemoteError)) throw error;
+      if (options.once) {
+        console.error(error.message);
+        return 3;
+      }
+      if (error.message !== lastMessage) {
+        log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
+        lastMessage = error.message;
+      }
+      sleep(config.pollSeconds * 1000);
+      continue;
+    }
     if (!note) {
       if (options.once) return 2;
       if (!announcedWaiting) log(`[bigeon] waiting for a task (checking every ${config.pollSeconds}s)...`);
@@ -119,7 +137,20 @@ export async function runWorker(
 
     const summary = `worker agent ${exitText}`;
     const text = resultNoteText(projectDir, result, tries, summary, agentSaid);
-    sendNote(projectDir, config, 'result', note.id, text);
+    let lastSendError = '';
+    for (;;) {
+      try {
+        sendNote(projectDir, config, 'result', note.id, text);
+        break;
+      } catch (error) {
+        if (!(error instanceof RemoteError)) throw error;
+        if (error.message !== lastSendError) {
+          log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
+          lastSendError = error.message;
+        }
+        sleep(config.pollSeconds * 1000);
+      }
+    }
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
   }

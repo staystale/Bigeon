@@ -64,7 +64,7 @@ Or `npm link` inside the bigeon folder to get a global `bigeon` command.
 | `bigeon watch results` | foreman | Wait for a new result, print it |
 | `bigeon send result 001 --text "..."` | either | Send a hand-written result |
 
-`watch` exits with code 2 when `--once` or `--timeout MINUTES` runs out with nothing new. Polling is plain
+`watch` exits with code 2 when `--once` or `--timeout MINUTES` runs out with nothing new. It exits with code 3 when it cannot reach the remote; without --once it keeps retrying instead. Polling is plain
 git, so it costs no model tokens until a note arrives.
 
 ## Telling your agents
