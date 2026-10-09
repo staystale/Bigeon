@@ -34,4 +34,8 @@ Talk to the worker only through notes on that repo. Do not log in to the worker 
 - Never put keys, tokens or secret URLs in notes.
 - Report measured results (what passed, what failed), not intentions.
 - Ask the human before every major step or design decision, and before starting a new project.
+- When proposing tasks, give each one an approximate size so the human can weigh it:
+  S (one file, under ~30 lines, a few minutes), M (2-4 files or a new test, ~5-15 minutes),
+  L (5+ files, new behaviour plus several tests, 15+ minutes; consider splitting it).
+- Keep messages to the human brief. Explain more only when asked or when a decision needs it.
 - Move work to `main` only after reviewing the diff and seeing the repo's own check pass on that commit.
