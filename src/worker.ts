@@ -4,8 +4,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
-import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
-import { findNewNote, sendNote, RemoteError } from './comms.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import { runCheck, formatCheck, resultNoteText, sleep, git } from './lib.ts';
+import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
@@ -29,6 +31,7 @@ export function workerPrompt(
     '- Do not edit the check or bigeon.config.json to make it pass.',
     '- Do not run "bigeon report" or "bigeon send". The loop reports for you.',
     `- If you changed files inside this git project, commit them on a branch named worker/${id} and push it.`,
+    `- If the branch worker/${id} already exists from an earlier interrupted run, start it again from origin/main.`,
     '- Finish with one or two lines saying what you did and anything you could not do.',
     '',
   ];
@@ -110,7 +113,7 @@ export async function runWorker(
   for (;;) {
     let note: Note | null = null;
     try {
-      note = findNewNote(projectDir, config, 'task');
+      note = findNewNote(projectDir, config, 'task', { markSeen: false });
       if (lastMessage) log('[bigeon] reconnected');
       lastMessage = '';
     } catch (error) {
@@ -135,6 +138,20 @@ export async function runWorker(
     }
     announcedWaiting = false;
     log(`[bigeon] task ${note.id} received:\n${note.text.trim()}`);
+
+    // A result already pushed means an earlier run crashed before marking the task seen.
+    if (fs.existsSync(path.join(commsDir(projectDir), 'results', `${note.id}.md`))) {
+      markNoteSeen(projectDir, 'task', note);
+      log(`[bigeon] task ${note.id} already has a result, skipping`);
+      if (options.once) return 0;
+      continue;
+    }
+    // Start clean: drop anything an interrupted run left in the working tree.
+    if (git(['status', '--porcelain'], projectDir).out) {
+      log('[bigeon] cleaning leftovers from an interrupted run');
+      git(['reset', '--hard', '--quiet'], projectDir);
+      git(['clean', '-fd', '--quiet'], projectDir);
+    }
 
     // Assigned in the loop below (original code assumed maxTries >= 1).
     let result!: CheckResult;
@@ -171,6 +188,7 @@ export async function runWorker(
         sleep(config.pollSeconds * 1000);
       }
     }
+    markNoteSeen(projectDir, 'task', note);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
   }

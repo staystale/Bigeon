@@ -123,7 +123,12 @@ function noteKey(name: string, text: string): string {
 }
 
 // Look for a note not shown yet. Returns { id, text } or null.
-export function findNewNote(projectDir: string, config: Config, kind: NoteKind): Note | null {
+export function findNewNote(
+  projectDir: string,
+  config: Config,
+  kind: NoteKind,
+  options: { markSeen?: boolean } = {},
+): Note | null {
   const dir = ensureComms(projectDir, config);
   pullComms(dir, config);
   const folder = path.join(dir, folderFor(kind));
@@ -138,7 +143,17 @@ export function findNewNote(projectDir: string, config: Config, kind: NoteKind):
     .filter((note) => !seen.includes(note.key));
   const note = fresh[0];
   if (!note) return null;
-  fs.mkdirSync(path.join(projectDir, STATE_DIR), { recursive: true });
-  fs.writeFileSync(seenFile(projectDir, kind), JSON.stringify([...seen, note.key]));
+  if (options.markSeen ?? true) appendSeen(projectDir, kind, note.key);
   return { id: note.name.replace(/\.md$/, ''), text: note.text };
+}
+
+function appendSeen(projectDir: string, kind: NoteKind, key: string): void {
+  const seen = readSeen(projectDir, kind);
+  fs.mkdirSync(path.join(projectDir, STATE_DIR), { recursive: true });
+  fs.writeFileSync(seenFile(projectDir, kind), JSON.stringify([...seen, key]));
+}
+
+// Mark a note as seen once it has been fully handled.
+export function markNoteSeen(projectDir: string, kind: NoteKind, note: Note): void {
+  appendSeen(projectDir, kind, noteKey(`${note.id}.md`, note.text));
 }
