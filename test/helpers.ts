@@ -32,3 +32,20 @@ export function setupRemote(prefix: string): { root: string; remote: string } {
   run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
   return { root, remote };
 }
+
+// Kill a process and all its children (the worker and the agent it started).
+export function killTree(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+}
