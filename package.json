@@ -7,11 +7,24 @@
     "bigeon": "bin/bigeon.mjs"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\""
+    "test": "node --test \"test/*.test.*\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "verify": "npm run typecheck && npm test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.18"
   },
   "license": "MIT",
-  "keywords": ["agents", "claude", "git", "llm", "orchestration", "local-models"]
+  "keywords": [
+    "agents",
+    "claude",
+    "git",
+    "llm",
+    "orchestration",
+    "local-models"
+  ],
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
 }
