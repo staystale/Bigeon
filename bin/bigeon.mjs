@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject,
+  loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
 } from '../src/lib.mjs';
 import { sendNote, findNewNote } from '../src/comms.mjs';
 import { runWorker } from '../src/worker.mjs';
@@ -69,6 +69,8 @@ function main() {
   }
 
   const config = loadConfig(projectDir);
+
+  if (['send', 'report', 'watch', 'worker'].includes(command)) requireGit();
 
   if (command === 'check') {
     const result = runCheck(projectDir, config);

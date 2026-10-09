@@ -36,8 +36,20 @@ export function git(args, workingDir) {
   return {
     ok: result.status === 0,
     out: (result.stdout || '').trim(),
-    err: (result.stderr || '').trim(),
+    err: (result.stderr || '').trim() || (result.error ? result.error.message : ''),
   };
+}
+
+// Stop early with a plain message if git cannot be run (common after installing git: the terminal
+// that was already open does not know about it until it is closed and reopened).
+export function requireGit() {
+  const result = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      'git was not found. Bigeon passes notes through git, so it cannot run without it.\n'
+      + 'If git is installed, close this terminal and open a new one so it picks up the updated PATH.',
+    );
+  }
 }
 
 export function mustGit(args, workingDir) {
