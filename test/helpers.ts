@@ -17,8 +17,6 @@ export function makeClone(root: string, remote: string, name: string): string {
   run('git', ['clone', '--quiet', remote, dir], root);
   run('git', ['config', 'user.name', name], dir);
   run('git', ['config', 'user.email', `${name}@example.invalid`], dir);
-  // The fake agent and check are test scaffolding: keep them ignored so the worker's clean step leaves them alone.
-  fs.appendFileSync(path.join(dir, '.git', 'info', 'exclude'), 'agent.js\ncheck.js\nbigeon.config.json\n.bigeon/\n');
   return dir;
 }
 
