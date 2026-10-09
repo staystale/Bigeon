@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
-} from '../src/lib.mjs';
+} from '../src/lib.ts';
 import { sendNote, findNewNote } from '../src/comms.mjs';
 import { runWorker } from '../src/worker.mjs';
 
