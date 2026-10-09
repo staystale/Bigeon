@@ -5,6 +5,9 @@ the `bigeon` command, run from inside the project folder. Keep every message sho
 
 If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 
+If you were started by `bigeon worker`, the task is already in your prompt and the loop runs the check
+and reports for you: skip steps 1 and 6 below and do not run `bigeon report` or `bigeon send`.
+
 ## Loop
 
 1. Wait for a task:
@@ -26,5 +29,6 @@ If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 
 - Never edit files outside the task's scope.
 - Never write to the `tasks/` folder. Only the foreman does.
+- Never push to `main`. Only `worker/NNN`.
 - Never put keys, tokens or secret URLs in code, commits or notes.
 - If the task is unclear, report FAIL with a one-line question in the summary instead of guessing.

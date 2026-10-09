@@ -26,10 +26,23 @@ cline --auto-approve true --timeout 900 "Read <path-to-Bigeon>/docs/WORKER.md an
 - `-c <path>` sets the working directory if you are not already in it.
 - `-P <provider> -m <model>` override the provider and model for one run.
 
-## Keep it looping
+## Keep it looping (recommended: `bigeon worker`)
 
-A Cline run ends when its task ends, so the loop needs something outside it. Simplest is a small shell loop
-that starts one pass at a time and sleeps when there is no task. In PowerShell:
+Set `workerCommand` in the project's `bigeon.config.json`, for example
+`cline --auto-approve true --timeout 600 "The task and rules are provided on stdin. Carry out that task now, following the rules."`,
+then run this in the project folder and leave the window open:
+
+```
+node <path-to-Bigeon>/bin/bigeon.ts worker
+```
+
+It waits for a task (no tokens), starts Cline with the task on stdin, runs the check, retries up to
+`maxTries`, and pushes the result note itself, so a result always goes back even if Cline crashes.
+
+### Alternative: a shell loop
+
+A Cline run ends when its task ends, so without `bigeon worker` the loop needs something outside it.
+A small shell loop that starts one pass at a time and sleeps when there is no task works too. In PowerShell:
 
 ```
 while ($true) {

@@ -12,7 +12,8 @@ This work style is called the **Foreman Loop**. See [docs/foreman-loop.md](docs/
 - Expensive tokens go on thinking (planning, review, fixes), not typing.
 - Only short results cross between machines: pass/fail plus ~20 error lines, never whole logs.
 - Works with any language: the check is just a command that exits 0 or not.
-- Zero dependencies. Node 18+ and git.
+- No runtime dependencies. Node 22.18+ (it runs the TypeScript source directly) and git.
+- Works with any git repo: run it inside a clone of the project you want to work on.
 
 ## Install
 
@@ -26,7 +27,7 @@ Or `npm link` inside the bigeon folder to get a global `bigeon` command.
 
 ## First-run checklist (do this on both machines)
 
-1. `node --version` (18 or newer) and `git --version` both work.
+1. `node --version` (22.18 or newer) and `git --version` both work.
 2. Clone Bigeon, and clone your project. Both machines must push to the same project remote.
 3. In the project folder: `bigeon init`, then set `checkCommand` in `bigeon.config.json`.
 4. `bigeon check` prints PASS or FAIL. Fix this before involving any agent.
@@ -84,10 +85,14 @@ never conflict. Code goes on normal branches as usual. See [docs/PROTOCOL.md](do
 ## Test
 
 ```
-npm test
+npm install
+npm run verify
 ```
 
-Runs a full foreman/worker loop against a local bare git remote.
+Type-checks the source (`tsc`, check only, nothing is built) and runs a full foreman/worker loop against
+a local bare git remote. TypeScript is a dev dependency only: Node runs the `.ts` files as they are.
+
+Our own setup and habits are in [docs/HOW-WE-WORK.md](docs/HOW-WE-WORK.md).
 
 ## Limits
 

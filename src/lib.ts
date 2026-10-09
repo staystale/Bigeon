@@ -1,4 +1,4 @@
-// Bigeon core: config, git helper, and the check runner. No dependencies, Node 18+.
+// Bigeon core: config, git helper, and the check runner. No runtime dependencies, Node 22.18+.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
