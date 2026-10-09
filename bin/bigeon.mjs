@@ -52,7 +52,7 @@ function readBody(flags) {
   return fs.readFileSync(0, 'utf8');
 }
 
-function main() {
+async function main() {
   const projectDir = process.cwd();
   const [command, ...rest] = process.argv.slice(2);
   const { positional, flags } = parseArguments(rest);
@@ -97,7 +97,7 @@ function main() {
   }
 
   if (command === 'worker') {
-    return runWorker(projectDir, config, fileURLToPath(import.meta.url), { once: Boolean(flags.once) });
+    return await runWorker(projectDir, config, fileURLToPath(import.meta.url), { once: Boolean(flags.once) });
   }
 
   if (command === 'watch') {
@@ -121,7 +121,7 @@ function main() {
 }
 
 try {
-  process.exitCode = main();
+  process.exitCode = await main();
 } catch (error) {
   console.error(`bigeon: ${error.message}`);
   process.exitCode = 1;
