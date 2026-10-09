@@ -2,7 +2,7 @@
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
 import { spawn } from 'node:child_process';
-import { runCheck, formatCheck, resultNoteText, sleep } from './lib.mjs';
+import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
 import { findNewNote, sendNote } from './comms.mjs';
 
 const AGENT_TAIL_LINES = 15;

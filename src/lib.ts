@@ -2,8 +2,9 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Config, CheckResult, GitResult } from './types.ts';
 
-export const DEFAULT_CONFIG = {
+export const DEFAULT_CONFIG: Config = {
   checkCommand: '',
   errorLines: 20,
   maxTries: 3,
@@ -18,20 +19,20 @@ export const DEFAULT_CONFIG = {
 export const CONFIG_FILE = 'bigeon.config.json';
 export const STATE_DIR = '.bigeon';
 
-export function loadConfig(projectDir) {
+export function loadConfig(projectDir: string): Config {
   const configPath = path.join(projectDir, CONFIG_FILE);
-  let userConfig = {};
+  let userConfig: Partial<Config> = {};
   if (fs.existsSync(configPath)) {
     try {
       userConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     } catch (error) {
-      throw new Error(`${CONFIG_FILE} is not valid JSON: ${error.message}`);
+      throw new Error(`${CONFIG_FILE} is not valid JSON: ${(error as Error).message}`);
     }
   }
   return { ...DEFAULT_CONFIG, ...userConfig };
 }
 
-export function git(args, workingDir) {
+export function git(args: string[], workingDir?: string): GitResult {
   const result = spawnSync('git', args, { cwd: workingDir, encoding: 'utf8' });
   return {
     ok: result.status === 0,
@@ -42,7 +43,7 @@ export function git(args, workingDir) {
 
 // Stop early with a plain message if git cannot be run (common after installing git: the terminal
 // that was already open does not know about it until it is closed and reopened).
-export function requireGit() {
+export function requireGit(): void {
   const result = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (result.error || result.status !== 0) {
     throw new Error(
@@ -52,7 +53,7 @@ export function requireGit() {
   }
 }
 
-export function mustGit(args, workingDir) {
+export function mustGit(args: string[], workingDir?: string): string {
   const result = git(args, workingDir);
   if (!result.ok) {
     throw new Error(`git ${args.join(' ')} failed: ${result.err || result.out}`);
@@ -63,7 +64,7 @@ export function mustGit(args, workingDir) {
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 // Run the project's check command. Returns a short, token-cheap summary.
-export function runCheck(projectDir, config) {
+export function runCheck(projectDir: string, config: Config): CheckResult {
   if (!config.checkCommand) {
     throw new Error(`No checkCommand set in ${CONFIG_FILE}`);
   }
@@ -74,7 +75,7 @@ export function runCheck(projectDir, config) {
     timeout: config.checkTimeoutSeconds * 1000,
     maxBuffer: 64 * 1024 * 1024,
   });
-  const timedOut = Boolean(run.error && run.error.code === 'ETIMEDOUT');
+  const timedOut = Boolean(run.error && (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
   const exitCode = timedOut ? null : run.status;
   const combined = `${run.stdout || ''}\n${run.stderr || ''}`.replace(ANSI_PATTERN, '');
   const allLines = combined.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
@@ -92,7 +93,7 @@ export function runCheck(projectDir, config) {
   };
 }
 
-export function formatCheck(checkResult) {
+export function formatCheck(checkResult: CheckResult): string {
   if (checkResult.status === 'PASS') return 'PASS';
   const reason = checkResult.timedOut ? 'timed out' : `exit code ${checkResult.exitCode}`;
   const lines = [`FAIL (${reason})`, ...checkResult.errors];
@@ -100,7 +101,13 @@ export function formatCheck(checkResult) {
   return lines.join('\n');
 }
 
-export function resultNoteText(projectDir, checkResult, tries, summary, agentSaid) {
+export function resultNoteText(
+  projectDir: string,
+  checkResult: CheckResult,
+  tries: number,
+  summary?: string,
+  agentSaid?: string[],
+): string {
   const lines = [`Status: ${checkResult.status}`, `Commit: ${currentCommit(projectDir)}`, `Tries: ${tries}`];
   if (checkResult.status === 'FAIL') lines.push('Errors:', formatCheck(checkResult));
   if (summary) lines.push(`Summary: ${summary}`);
@@ -108,17 +115,17 @@ export function resultNoteText(projectDir, checkResult, tries, summary, agentSai
   return lines.join('\n');
 }
 
-export function currentCommit(projectDir) {
+export function currentCommit(projectDir: string): string {
   const result = git(['rev-parse', '--short', 'HEAD'], projectDir);
   return result.ok ? result.out : 'unknown';
 }
 
-export function sleep(milliseconds) {
+export function sleep(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-export function initProject(projectDir) {
-  const created = [];
+export function initProject(projectDir: string): string[] {
+  const created: string[] = [];
   const configPath = path.join(projectDir, CONFIG_FILE);
   if (!fs.existsSync(configPath)) {
     fs.writeFileSync(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);

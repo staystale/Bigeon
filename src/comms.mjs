@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { git, mustGit, STATE_DIR } from './lib.mjs';
+import { git, mustGit, STATE_DIR } from './lib.ts';
 
 export function commsDir(projectDir) {
   return path.join(projectDir, STATE_DIR, 'comms');
