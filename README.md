@@ -24,6 +24,16 @@ node ../bigeon/bin/bigeon.mjs init
 
 Or `npm link` inside the bigeon folder to get a global `bigeon` command.
 
+## First-run checklist (do this on both machines)
+
+1. `node --version` (18 or newer) and `git --version` both work.
+2. Clone Bigeon, and clone your project. Both machines must push to the same project remote.
+3. In the project folder: `bigeon init`, then set `checkCommand` in `bigeon.config.json`.
+4. `bigeon check` prints PASS or FAIL. Fix this before involving any agent.
+5. Foreman: `bigeon send task --text "test"`. Worker: `bigeon watch tasks --once` should print it.
+6. Worker: `bigeon report 001`. Foreman: `bigeon watch results --once` should print the result.
+7. Only then start the agents. To use the Cline CLI as the worker, see [docs/CLINE-WORKER.md](docs/CLINE-WORKER.md).
+
 ## Configure
 
 `bigeon init` creates `bigeon.config.json` in your project:

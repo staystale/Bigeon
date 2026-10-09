@@ -1,5 +1,6 @@
 // Bigeon comms: notes travel on a git branch kept in a hidden worktree,
 // so the project's own working tree and branch are never disturbed.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git, mustGit, STATE_DIR } from './lib.mjs';
@@ -103,6 +104,11 @@ function readSeen(projectDir, kind) {
   }
 }
 
+// A note counts as seen by name AND content, so an updated note (e.g. a retried result) shows up again.
+function noteKey(name, text) {
+  return `${name}:${createHash('sha1').update(text).digest('hex')}`;
+}
+
 // Look for a note not shown yet. Returns { id, text } or null.
 export function findNewNote(projectDir, config, kind) {
   const dir = ensureComms(projectDir, config);
@@ -110,11 +116,16 @@ export function findNewNote(projectDir, config, kind) {
   const folder = path.join(dir, folderFor(kind));
   const seen = readSeen(projectDir, kind);
   const fresh = fs.readdirSync(folder)
-    .filter((name) => name.endsWith('.md') && !seen.includes(name))
-    .sort();
+    .filter((name) => name.endsWith('.md'))
+    .sort()
+    .map((name) => {
+      const text = fs.readFileSync(path.join(folder, name), 'utf8');
+      return { name, text, key: noteKey(name, text) };
+    })
+    .filter((note) => !seen.includes(note.key));
   if (fresh.length === 0) return null;
-  const name = fresh[0];
+  const note = fresh[0];
   fs.mkdirSync(path.join(projectDir, STATE_DIR), { recursive: true });
-  fs.writeFileSync(seenFile(projectDir, kind), JSON.stringify([...seen, name]));
-  return { id: name.replace(/\.md$/, ''), text: fs.readFileSync(path.join(folder, name), 'utf8') };
+  fs.writeFileSync(seenFile(projectDir, kind), JSON.stringify([...seen, note.key]));
+  return { id: note.name.replace(/\.md$/, ''), text: note.text };
 }

@@ -80,7 +80,6 @@ test('foreman sends a task, worker fails then passes, foreman reads results', ()
   // Worker fixes it and reports a pass (overwrites result 001).
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   assert.equal(bigeon(worker, 'report', '001', '--summary', 'fixed').status, 0);
-  fs.rmSync(path.join(foreman, '.bigeon', 'seen-results.json'));
   const passedResult = bigeon(foreman, 'watch', 'results', '--once');
   assert.match(passedResult.stdout, /Status: PASS/);
   assert.match(passedResult.stdout, /Summary: fixed/);
