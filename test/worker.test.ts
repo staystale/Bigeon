@@ -135,3 +135,63 @@ test('worker gives up after maxTries and reports FAIL with the check errors', ()
   assert.match(result.stdout, /nope, still broken/);
   assert.match(result.stdout, /Worker said:\r?\nI tried/);
 });
+
+test('worker timeout stops the agent and the processes it started', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-timeout-'));
+  const remote = path.join(root, 'remote.git');
+  run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
+  const seed = makeClone(root, remote, 'seed');
+  fs.writeFileSync(path.join(seed, 'README.md'), 'demo\n');
+  run('git', ['add', '.'], seed);
+  run('git', ['commit', '--quiet', '-m', 'seed'], seed);
+  run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
+
+  const foreman = makeClone(root, remote, 'foreman');
+  const worker = makeClone(root, remote, 'worker');
+  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node -e 0' }));
+  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify({
+    checkCommand: 'node -e 0',
+    workerCommand: 'node agent.js',
+    pollSeconds: 1,
+    maxTries: 1,
+    workerTimeoutSeconds: 2,
+  }));
+  fs.writeFileSync(
+    path.join(worker, 'agent.js'),
+    "const { spawn } = require('child_process');\n" +
+      "const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });\n" +
+      "require('fs').writeFileSync('grandchild.pid', String(c.pid));\n" +
+      'setInterval(()=>{},1000);\n',
+  );
+
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: hang'], foreman).status, 0);
+  const done = run('node', [cli, 'worker', '--once'], worker);
+  assert.match(done.stdout, /worker agent finished \(timed out\)/);
+
+  const pidFile = path.join(worker, 'grandchild.pid');
+  assert.ok(fs.existsSync(pidFile), 'grandchild.pid should exist');
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  let running = true;
+  const deadline = Date.now() + 5000;
+  while (running && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') running = false;
+      else await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  if (running) {
+    try {
+      process.kill(pid);
+    } catch {
+      // already gone
+    }
+    assert.fail('grandchild process was still running after the timeout');
+  }
+
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /Summary: worker agent timed out/);
+});
+
