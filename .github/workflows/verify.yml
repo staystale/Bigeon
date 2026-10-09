@@ -1,0 +1,32 @@
+# Runs on every push and pull request. The "verify" job is the one the rule on main requires.
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        node: ['22.18', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run verify
+
+  # One fixed name to require on main, whatever the matrix above contains.
+  verify:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: All test jobs passed
+        run: test "${{ needs.test.result }}" = "success"
