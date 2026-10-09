@@ -4,16 +4,17 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git, mustGit, STATE_DIR } from './lib.ts';
+import type { Config, Note, NoteKind } from './types.ts';
 
-export function commsDir(projectDir) {
+export function commsDir(projectDir: string): string {
   return path.join(projectDir, STATE_DIR, 'comms');
 }
 
-function hasRemote(workingDir, config) {
+function hasRemote(workingDir: string, config: Config): boolean {
   return git(['remote', 'get-url', config.remote], workingDir).ok;
 }
 
-export function ensureComms(projectDir, config) {
+export function ensureComms(projectDir: string, config: Config): string {
   const dir = commsDir(projectDir);
   if (fs.existsSync(path.join(dir, '.git'))) return dir;
 
@@ -44,22 +45,22 @@ export function ensureComms(projectDir, config) {
   return dir;
 }
 
-function pullComms(dir, config) {
+function pullComms(dir: string, config: Config): void {
   if (!hasRemote(dir, config)) return;
   git(['pull', '--quiet', '--rebase', '--autostash', config.remote, config.commsBranch], dir);
 }
 
-function folderFor(kind) {
+function folderFor(kind: NoteKind): string {
   if (kind === 'task') return 'tasks';
   if (kind === 'result') return 'results';
   throw new Error(`kind must be "task" or "result", got "${kind}"`);
 }
 
-function padId(id) {
+function padId(id: string | number): string {
   return String(id).padStart(3, '0');
 }
 
-function nextTaskId(dir) {
+function nextTaskId(dir: string): string {
   const taken = fs.readdirSync(path.join(dir, 'tasks'))
     .map((name) => parseInt(name, 10))
     .filter((number) => Number.isFinite(number));
@@ -67,11 +68,17 @@ function nextTaskId(dir) {
 }
 
 // Write a note, commit it and push it. Returns the note's id.
-export function sendNote(projectDir, config, kind, id, text) {
+export function sendNote(
+  projectDir: string,
+  config: Config,
+  kind: NoteKind,
+  id: string | number | null | undefined,
+  text: string,
+): string {
   const dir = ensureComms(projectDir, config);
   pullComms(dir, config);
   const folder = folderFor(kind);
-  let noteId;
+  let noteId: string;
   if (id) {
     noteId = padId(id);
   } else if (kind === 'task') {
@@ -92,11 +99,11 @@ export function sendNote(projectDir, config, kind, id, text) {
   throw new Error('Could not push the note after 3 attempts');
 }
 
-function seenFile(projectDir, kind) {
+function seenFile(projectDir: string, kind: NoteKind): string {
   return path.join(projectDir, STATE_DIR, `seen-${folderFor(kind)}.json`);
 }
 
-function readSeen(projectDir, kind) {
+function readSeen(projectDir: string, kind: NoteKind): string[] {
   try {
     return JSON.parse(fs.readFileSync(seenFile(projectDir, kind), 'utf8'));
   } catch {
@@ -105,12 +112,12 @@ function readSeen(projectDir, kind) {
 }
 
 // A note counts as seen by name AND content, so an updated note (e.g. a retried result) shows up again.
-function noteKey(name, text) {
+function noteKey(name: string, text: string): string {
   return `${name}:${createHash('sha1').update(text).digest('hex')}`;
 }
 
 // Look for a note not shown yet. Returns { id, text } or null.
-export function findNewNote(projectDir, config, kind) {
+export function findNewNote(projectDir: string, config: Config, kind: NoteKind): Note | null {
   const dir = ensureComms(projectDir, config);
   pullComms(dir, config);
   const folder = path.join(dir, folderFor(kind));
@@ -123,8 +130,8 @@ export function findNewNote(projectDir, config, kind) {
       return { name, text, key: noteKey(name, text) };
     })
     .filter((note) => !seen.includes(note.key));
-  if (fresh.length === 0) return null;
   const note = fresh[0];
+  if (!note) return null;
   fs.mkdirSync(path.join(projectDir, STATE_DIR), { recursive: true });
   fs.writeFileSync(seenFile(projectDir, kind), JSON.stringify([...seen, note.key]));
   return { id: note.name.replace(/\.md$/, ''), text: note.text };
