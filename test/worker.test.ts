@@ -1,36 +1,12 @@
 // Worker loop test: a fake agent stands in for Cline.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'bigeon.ts');
-
-function run(command: string, args: string[], cwd: string): SpawnSyncReturns<string> {
-  return spawnSync(command, args, { cwd, encoding: 'utf8' });
-}
-
-function makeClone(root: string, remote: string, name: string): string {
-  const dir = path.join(root, name);
-  run('git', ['clone', '--quiet', remote, dir], root);
-  run('git', ['config', 'user.name', name], dir);
-  run('git', ['config', 'user.email', `${name}@example.invalid`], dir);
-  return dir;
-}
+import { cli, run, makeClone, setupRemote } from './helpers.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-worker-'));
-  const remote = path.join(root, 'remote.git');
-  run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
-  const seed = makeClone(root, remote, 'seed');
-  fs.writeFileSync(path.join(seed, 'README.md'), 'demo\n');
-  run('git', ['add', '.'], seed);
-  run('git', ['commit', '--quiet', '-m', 'seed'], seed);
-  run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
+  const { root, remote } = setupRemote('bigeon-worker-');
 
   const foreman = makeClone(root, remote, 'foreman');
   const worker = makeClone(root, remote, 'worker');
@@ -63,14 +39,7 @@ test('worker command runs the agent with the task on stdin, then reports the che
 });
 
 test('worker retries a failing check with the failure shown to the agent, then reports tries and agent output', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-retry-'));
-  const remote = path.join(root, 'remote.git');
-  run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
-  const seed = makeClone(root, remote, 'seed');
-  fs.writeFileSync(path.join(seed, 'README.md'), 'demo\n');
-  run('git', ['add', '.'], seed);
-  run('git', ['commit', '--quiet', '-m', 'seed'], seed);
-  run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
+  const { root, remote } = setupRemote('bigeon-retry-');
 
   const foreman = makeClone(root, remote, 'foreman');
   const worker = makeClone(root, remote, 'worker');
@@ -104,14 +73,7 @@ test('worker retries a failing check with the failure shown to the agent, then r
 });
 
 test('worker gives up after maxTries and reports FAIL with the check errors', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-giveup-'));
-  const remote = path.join(root, 'remote.git');
-  run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
-  const seed = makeClone(root, remote, 'seed');
-  fs.writeFileSync(path.join(seed, 'README.md'), 'demo\n');
-  run('git', ['add', '.'], seed);
-  run('git', ['commit', '--quiet', '-m', 'seed'], seed);
-  run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
+  const { root, remote } = setupRemote('bigeon-giveup-');
 
   const foreman = makeClone(root, remote, 'foreman');
   const worker = makeClone(root, remote, 'worker');
@@ -137,14 +99,7 @@ test('worker gives up after maxTries and reports FAIL with the check errors', ()
 });
 
 test('worker timeout stops the agent and the processes it started', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-timeout-'));
-  const remote = path.join(root, 'remote.git');
-  run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
-  const seed = makeClone(root, remote, 'seed');
-  fs.writeFileSync(path.join(seed, 'README.md'), 'demo\n');
-  run('git', ['add', '.'], seed);
-  run('git', ['commit', '--quiet', '-m', 'seed'], seed);
-  run('git', ['push', '--quiet', 'origin', 'HEAD:main'], seed);
+  const { root, remote } = setupRemote('bigeon-timeout-');
 
   const foreman = makeClone(root, remote, 'foreman');
   const worker = makeClone(root, remote, 'worker');
