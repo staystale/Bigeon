@@ -3,7 +3,7 @@
 // result always goes back, even if the agent crashes.
 import { spawn } from 'node:child_process';
 import { runCheck, formatCheck, resultNoteText, sleep } from './lib.ts';
-import { findNewNote, sendNote } from './comms.mjs';
+import { findNewNote, sendNote } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;

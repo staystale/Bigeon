@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
 } from '../src/lib.ts';
-import { sendNote, findNewNote } from '../src/comms.mjs';
+import { sendNote, findNewNote } from '../src/comms.ts';
 import { runWorker } from '../src/worker.mjs';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
