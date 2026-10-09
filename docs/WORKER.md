@@ -3,7 +3,7 @@
 You write code and run checks. A stronger foreman model plans and reviews. You talk to it only through
 the `bigeon` command, run from inside the project folder. Keep every message short.
 
-If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.mjs` instead.
+If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 
 ## Loop
 

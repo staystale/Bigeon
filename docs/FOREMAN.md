@@ -4,7 +4,7 @@ You plan, review and fix. A cheaper worker model does the typing and runs the ch
 only through the `bigeon` command, run from inside the project folder. Keep every message short:
 tokens cost money.
 
-If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.mjs` instead.
+If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 
 ## Loop
 

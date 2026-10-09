@@ -19,7 +19,7 @@ This work style is called the **Foreman Loop**. See [docs/foreman-loop.md](docs/
 ```
 git clone <this repo> bigeon
 cd your-project
-node ../bigeon/bin/bigeon.mjs init
+node ../bigeon/bin/bigeon.ts init
 ```
 
 Or `npm link` inside the bigeon folder to get a global `bigeon` command.
