@@ -100,10 +100,11 @@ export function formatCheck(checkResult) {
   return lines.join('\n');
 }
 
-export function resultNoteText(projectDir, checkResult, tries, summary) {
+export function resultNoteText(projectDir, checkResult, tries, summary, agentSaid) {
   const lines = [`Status: ${checkResult.status}`, `Commit: ${currentCommit(projectDir)}`, `Tries: ${tries}`];
   if (checkResult.status === 'FAIL') lines.push('Errors:', formatCheck(checkResult));
   if (summary) lines.push(`Summary: ${summary}`);
+  if (agentSaid && agentSaid.length > 0) lines.push('Worker said:', ...agentSaid);
   return lines.join('\n');
 }
 
