@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
 } from '../src/lib.ts';
-import { sendNote, findNewNote } from '../src/comms.ts';
+import { sendNote, findNewNote, RemoteError } from '../src/comms.ts';
 import { runWorker } from '../src/worker.ts';
-import type { ParsedArguments, NoteKind } from '../src/types.ts';
+import type { ParsedArguments, NoteKind, Note } from '../src/types.ts';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
 
@@ -23,7 +23,7 @@ Usage (run inside your project):
                                            run the check, report. Needs workerCommand in the config.
   bigeon watch tasks|results [--once] [--timeout MINUTES]
                                            wait for a new note, print it, exit 0
-                                           (exit 2 = nothing new, so the model is not woken)
+                                           (exit 2 = nothing new, so the model is not woken, exit 3 = could not reach the remote)
 `;
 
 function parseArguments(argumentList: string[]): ParsedArguments {
@@ -107,8 +107,27 @@ async function main(): Promise<number> {
     const kind: NoteKind | null = target === 'tasks' ? 'task' : target === 'results' ? 'result' : null;
     if (!kind) throw new Error('watch needs "tasks" or "results"');
     const deadline = typeof flags.timeout === 'string' ? Date.now() + Number(flags.timeout) * 60000 : null;
+    let lastMessage = '';
     for (;;) {
-      const note = findNewNote(projectDir, config, kind);
+      let note: Note | null = null;
+      try {
+        note = findNewNote(projectDir, config, kind);
+        if (lastMessage) console.error('[bigeon] reconnected');
+        lastMessage = '';
+      } catch (error) {
+        if (!(error instanceof RemoteError)) throw error;
+        if (flags.once) {
+          console.error(`bigeon: ${error.message}`);
+          return 3;
+        }
+        if (error.message !== lastMessage) {
+          console.error(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
+          lastMessage = error.message;
+        }
+        if (deadline && Date.now() >= deadline) return 2;
+        sleep(config.pollSeconds * 1000);
+        continue;
+      }
       if (note) {
         console.log(`# ${kind} ${note.id}\n${note.text}`);
         return 0;

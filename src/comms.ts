@@ -45,9 +45,12 @@ export function ensureComms(projectDir: string, config: Config): string {
   return dir;
 }
 
+export class RemoteError extends Error {}
+
 function pullComms(dir: string, config: Config): void {
   if (!hasRemote(dir, config)) return;
-  git(['pull', '--quiet', '--rebase', '--autostash', config.remote, config.commsBranch], dir);
+  const result = git(['pull', '--quiet', '--rebase', '--autostash', config.remote, config.commsBranch], dir);
+  if (!result.ok) throw new RemoteError(`cannot reach ${config.remote}: ${result.err || result.out}`);
 }
 
 function folderFor(kind: NoteKind): string {
@@ -89,7 +92,10 @@ export function sendNote(
   const relativePath = path.join(folder, `${noteId}.md`);
   fs.writeFileSync(path.join(dir, relativePath), text.endsWith('\n') ? text : `${text}\n`);
   mustGit(['add', relativePath], dir);
-  mustGit(['commit', '--quiet', '-m', `bigeon: ${kind} ${noteId}`], dir);
+  // A retry after a failed push finds the note already committed.
+  if (!git(['diff', '--cached', '--quiet'], dir).ok) {
+    mustGit(['commit', '--quiet', '-m', `bigeon: ${kind} ${noteId}`], dir);
+  }
 
   if (!hasRemote(dir, config)) return noteId;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
