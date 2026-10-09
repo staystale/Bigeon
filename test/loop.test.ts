@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,15 +10,15 @@ import { fileURLToPath } from 'node:url';
 
 const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'bigeon.ts');
 
-function run(command, args, cwd) {
+function run(command: string, args: string[], cwd: string): SpawnSyncReturns<string> {
   return spawnSync(command, args, { cwd, encoding: 'utf8' });
 }
 
-function bigeon(cwd, ...args) {
+function bigeon(cwd: string, ...args: string[]): SpawnSyncReturns<string> {
   return run('node', [cli, ...args], cwd);
 }
 
-function makeClone(root, remote, name) {
+function makeClone(root: string, remote: string, name: string): string {
   const dir = path.join(root, name);
   run('git', ['clone', '--quiet', remote, dir], root);
   run('git', ['config', 'user.name', name], dir);
