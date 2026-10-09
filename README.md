@@ -56,6 +56,15 @@ Or `npm link` inside the bigeon folder to get a global `bigeon` command.
 `watch` exits with code 2 when `--once` or `--timeout MINUTES` runs out with nothing new. Polling is plain
 git, so it costs no model tokens until a note arrives.
 
+## Telling your agents
+
+Each agent reads one role file. In your message to the agent (or in that machine's own `CLAUDE.md`), say:
+
+- Foreman: `Read <path-to-Bigeon>/docs/FOREMAN.md and act as the foreman. Use bigeon in this project.`
+- Worker: `Read <path-to-Bigeon>/docs/WORKER.md and act as the worker. Use bigeon in this project.`
+
+The role files are [docs/FOREMAN.md](docs/FOREMAN.md) and [docs/WORKER.md](docs/WORKER.md).
+
 ## How it works
 
 Notes live on a git branch (`agent-comms`) in a hidden worktree at `.bigeon/comms`, so your own branch and
