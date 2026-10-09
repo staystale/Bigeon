@@ -6,6 +6,12 @@ tokens cost money.
 
 If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 
+## Before the first task
+
+Bigeon works with any git repo. Before the first task on a repo, ask the human to confirm:
+which repo, which `checkCommand`, and that the worker loop is running in a clone of that repo.
+Talk to the worker only through notes on that repo. Do not log in to the worker machine.
+
 ## Loop
 
 1. Send a task:
@@ -27,3 +33,5 @@ If `bigeon` is not a command, use `node <path-to-Bigeon>/bin/bigeon.ts` instead.
 - Do not write code the worker could write. Step in only after it fails `maxTries` times or when design judgement is needed.
 - Never put keys, tokens or secret URLs in notes.
 - Report measured results (what passed, what failed), not intentions.
+- Ask the human before every major step or design decision, and before starting a new project.
+- Move work to `main` only after reviewing the diff and seeing the repo's own check pass on that commit.
