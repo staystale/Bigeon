@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { runCheck, formatCheck, resultNoteText, sleep, git } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError } from './comms.ts';
@@ -54,21 +55,39 @@ export function workerPrompt(
 }
 
 // The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
-function readMarker(markerPath: string): { id: string; agentPid: number | null } {
+type Marker = { id: string; agentPid: number | null; attempts: number; bootTime: number };
+
+function readMarker(markerPath: string): Marker {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
     if (typeof parsed === 'object' && parsed !== null && 'id' in parsed && typeof parsed.id === 'string') {
       const agentPid = 'agentPid' in parsed && typeof parsed.agentPid === 'number' ? parsed.agentPid : null;
-      return { id: parsed.id, agentPid };
+      const attempts = 'attempts' in parsed && typeof parsed.attempts === 'number' ? parsed.attempts : 0;
+      const markerBoot = 'bootTime' in parsed && typeof parsed.bootTime === 'number' ? parsed.bootTime : 0;
+      return { id: parsed.id, agentPid, attempts, bootTime: markerBoot };
     }
   } catch {
     // missing or unreadable marker: treat as no interruption
   }
-  return { id: '', agentPid: null };
+  return { id: '', agentPid: null, attempts: 0, bootTime: 0 };
 }
 
-function readMarkerId(markerPath: string): string {
-  return readMarker(markerPath).id;
+// When this machine started; differs by a lot after a restart.
+function bootTime(): number {
+  return Date.now() - os.uptime() * 1000;
+}
+
+function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number): void {
+  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, attempts, bootTime: bootTime() }));
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 // Stop a process and everything it started (the shell wrapper alone is not enough).
@@ -132,6 +151,35 @@ export function agentTail(output: string): string[] {
   return lines.slice(-AGENT_TAIL_LINES).map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
 }
 
+const STASH_NOTE = 'Stashed: leftovers from the interrupted run (git stash list)';
+
+// Send the result (retrying while the remote is unreachable), then mark the task seen and drop the marker.
+function sendResult(
+  projectDir: string,
+  config: Config,
+  note: Note,
+  markerPath: string,
+  text: string,
+  log: (message: string) => void,
+): void {
+  let lastSendError = '';
+  for (;;) {
+    try {
+      sendNote(projectDir, config, 'result', note.id, text);
+      break;
+    } catch (error) {
+      if (!(error instanceof RemoteError)) throw error;
+      if (error.message !== lastSendError) {
+        log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
+        lastSendError = error.message;
+      }
+      sleep(config.pollSeconds * 1000);
+    }
+  }
+  markNoteSeen(projectDir, 'task', note);
+  fs.rmSync(markerPath, { force: true });
+}
+
 async function runLoop(
   projectDir: string,
   config: Config,
@@ -186,21 +234,44 @@ async function runLoop(
     }
     if (fs.existsSync(resultPath)) log(`[bigeon] task ${note.id} has an incomplete result, doing it again`);
     // Only after a real interruption (marker for this same task): stash leftovers, never delete them.
-    if (readMarkerId(markerPath) === note.id && git(['status', '--porcelain'], projectDir).out) {
+    const marker = readMarker(markerPath);
+    const attempts = (marker.id === note.id ? marker.attempts : 0) + 1;
+    let stashed = false;
+    if (marker.id === note.id && git(['status', '--porcelain'], projectDir).out) {
       log(`[bigeon] stashing leftovers from interrupted task ${note.id} (git stash list to recover)`);
       git(['stash', 'push', '--include-untracked', '--quiet', '-m', `bigeon: leftovers from interrupted task ${note.id}`], projectDir);
+      stashed = true;
     }
-    const leftoverPid = readMarker(markerPath).agentPid;
+    const leftoverPid = marker.agentPid;
     if (leftoverPid !== null) {
-      try {
-        killPid(leftoverPid);
-      } catch {
-        // already gone
+      if (Math.abs(marker.bootTime - bootTime()) >= 60000) {
+        log(`[bigeon] machine restarted since the interrupted run, not stopping old pid ${leftoverPid}`);
+      } else if (isRunning(leftoverPid)) {
+        try {
+          killPid(leftoverPid);
+        } catch {
+          // already gone
+        }
+        log(`[bigeon] stopped leftover agent ${leftoverPid} from an interrupted run`);
       }
-      log(`[bigeon] stopped leftover agent ${leftoverPid} from an interrupted run`);
     }
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, JSON.stringify({ id: note.id, agentPid: null }));
+    writeMarker(markerPath, note.id, null, attempts);
+
+    if (attempts > config.maxTries) {
+      const giveUp: CheckResult = {
+        status: 'FAIL',
+        exitCode: null,
+        timedOut: false,
+        errors: [`interrupted ${attempts - 1} times, giving up`],
+        hiddenLineCount: 0,
+      };
+      const giveUpText = resultNoteText(projectDir, giveUp, 0, 'gave up', undefined, stashed ? [STASH_NOTE] : undefined);
+      sendResult(projectDir, config, note, markerPath, giveUpText, log);
+      log(`[bigeon] task ${note.id} interrupted ${attempts - 1} times, giving up`);
+      if (options.once) return 1;
+      continue;
+    }
 
     // Assigned in the loop below (original code assumed maxTries >= 1).
     let result!: CheckResult;
@@ -213,7 +284,7 @@ async function runLoop(
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
       const taskId = note.id;
       const run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
-        fs.writeFileSync(markerPath, JSON.stringify({ id: taskId, agentPid: pid }));
+        writeMarker(markerPath, taskId, pid, attempts);
       });
       exitText = run.exitText;
       agentSaid = agentTail(run.output);
@@ -225,34 +296,10 @@ async function runLoop(
     }
 
     const summary = `worker agent ${exitText}`;
-    const text = resultNoteText(projectDir, result, tries, summary, agentSaid);
-    let lastSendError = '';
-    for (;;) {
-      try {
-        sendNote(projectDir, config, 'result', note.id, text);
-        break;
-      } catch (error) {
-        if (!(error instanceof RemoteError)) throw error;
-        if (error.message !== lastSendError) {
-          log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
-          lastSendError = error.message;
-        }
-        sleep(config.pollSeconds * 1000);
-      }
-    }
-    markNoteSeen(projectDir, 'task', note);
-    fs.rmSync(markerPath, { force: true });
+    const text = resultNoteText(projectDir, result, tries, summary, agentSaid, stashed ? [STASH_NOTE] : undefined);
+    sendResult(projectDir, config, note, markerPath, text, log);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
-  }
-}
-
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
