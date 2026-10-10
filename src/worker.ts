@@ -507,13 +507,14 @@ export async function runWorker(
   const removeLock = (): void => {
     fs.rmSync(lockPath, { force: true });
   };
+  const status = makeStatusReporter(projectDir, config, bigeonPath);
   const onSignal = (): void => {
+    status.publish('stopped');
     removeLock();
     process.exit(130);
   };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
-  const status = makeStatusReporter(projectDir, config, bigeonPath);
   try {
     return await runLoop(projectDir, config, bigeonPath, status, options);
   } finally {
