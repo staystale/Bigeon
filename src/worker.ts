@@ -32,6 +32,11 @@ export function workerPrompt(
     '- Do not run "bigeon report" or "bigeon send". The loop reports for you.',
     `- If you changed files inside this git project, commit them on a branch named worker/${id} and push it.`,
     `- If the branch worker/${id} already exists from an earlier interrupted run, start it again from origin/main.`,
+    `- Processes: the bigeon worker loop running you has pid ${process.pid}. Never stop it, its parent, or any process`,
+    '  you did not start yourself, unless the foreman or the user tells you to. Never stop processes by name or by',
+    '  matching command lines (no Stop-Process/taskkill/pkill on "node" or "bigeon").',
+    '- Run tests and checks in the foreground, one at a time, and wait for them to finish. Do not start them in the',
+    '  background or run two at once.',
     '- Finish with one or two lines saying what you did and anything you could not do.',
     '',
   ];

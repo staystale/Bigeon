@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cli, run, makeClone, setupRemote } from './helpers.ts';
+import { workerPrompt } from '../src/worker.ts';
+import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
   const { root, remote } = setupRemote('bigeon-worker-');
@@ -150,3 +152,10 @@ test('worker timeout stops the agent and the processes it started', async () => 
   assert.match(result.stdout, /Summary: worker agent timed out/);
 });
 
+
+test('the worker prompt names the loop pid and forbids stopping it', () => {
+  const prompt = workerPrompt('bigeon.ts', loadConfig(process.cwd()), '001', 'Goal: x', '');
+  assert.match(prompt, new RegExp(`worker loop running you has pid ${process.pid}`));
+  assert.match(prompt, /unless the foreman or the user tells you to/);
+  assert.match(prompt, /foreground, one at a time/);
+});
