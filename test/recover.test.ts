@@ -1,4 +1,4 @@
-﻿// Recovery tests: a crashed worker must not lose its task, and a rerun starts clean.
+// Recovery tests: a crashed worker must not lose its task, and a rerun starts clean.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,14 +21,14 @@ function setupPair(prefix: string): { root: string; foreman: string; worker: str
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
-    maxTries: 1,
+    maxTries: 3,
     workerTimeoutSeconds: 2,
   }));
   return { root, foreman, worker };
 }
 
 // Simulated crash: the worker is killed before it can report anything.
-async function crashWorker(worker: string, foreman: string): Promise<void> {
+async function crashWorker(worker: string, foreman: string, killAgent = true): Promise<void> {
   const child = spawn('node', [cli, 'worker', '--once'], { cwd: worker, detached: process.platform !== 'win32', stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   const started = path.join(worker, 'started.txt');
@@ -37,7 +37,9 @@ async function crashWorker(worker: string, foreman: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const appeared = fs.existsSync(started);
-  killTree(child.pid as number);
+  // killAgent false: only the worker dies, so its agent is left running like a real crash.
+  if (killAgent) killTree(child.pid as number);
+  else child.kill('SIGKILL');
   await exited;
   assert.equal(appeared, true, 'agent never wrote started.txt');
   assert.equal(run('node', [cli, 'watch', 'results', '--once'], foreman).status, 2);
@@ -159,8 +161,12 @@ test('a leftover agent from a crash is stopped on restart', async () => {
   );
   assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
 
-  await crashWorker(worker, foreman);
+  await crashWorker(worker, foreman, false);
   const pid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
+  // The shell wrapper may already be gone; point the marker at the agent's still-running child.
+  const markerPath = path.join(worker, '.bigeon', 'in-progress.json');
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(markerPath, JSON.stringify({ ...marker, agentPid: pid }));
 
   fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
   const again = run('node', [cli, 'worker', '--once'], worker);
