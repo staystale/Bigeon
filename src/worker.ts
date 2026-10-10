@@ -7,11 +7,10 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, ANSI_PATTERN } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
-const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 // Turn the worker status text into one line plus an exit code for `bigeon status`.
 export function describeStatus(

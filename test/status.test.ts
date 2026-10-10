@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cli, run, makeClone, setupRemote } from './helpers.ts';
+import { cli, run, setupPair as sharedSetupPair } from './helpers.ts';
 import { describeStatus } from '../src/worker.ts';
 
 function statusText(state: string, lastSeen: Date): string {
@@ -38,17 +38,13 @@ test('describeStatus: garbage is unreadable', () => {
 });
 
 function setupPair(prefix: string, heartbeatMinutes?: number): { foreman: string; worker: string } {
-  const { root, remote } = setupRemote(prefix);
-  const foreman = makeClone(root, remote, 'foreman');
-  const worker = makeClone(root, remote, 'worker');
-  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
   const workerConfig: Record<string, unknown> = {
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
   };
   if (heartbeatMinutes !== undefined) workerConfig.heartbeatMinutes = heartbeatMinutes;
-  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify(workerConfig));
+  const { foreman, worker } = sharedSetupPair(prefix, workerConfig);
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   return { foreman, worker };
 }

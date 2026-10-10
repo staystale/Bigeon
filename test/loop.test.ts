@@ -1,14 +1,9 @@
 // End-to-end test: foreman and worker clones talk through a local bare remote.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cli, run, makeClone, setupRemote } from './helpers.ts';
-
-function bigeon(cwd: string, ...args: string[]): SpawnSyncReturns<string> {
-  return run('node', [cli, ...args], cwd);
-}
+import { bigeon, makeClone, setupRemote } from './helpers.ts';
 
 test('foreman sends a task, worker fails then passes, foreman reads results', () => {
   const { root, remote } = setupRemote('bigeon-');

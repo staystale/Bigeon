@@ -4,21 +4,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { cli, run, makeClone, setupRemote, killTree, waitGone } from './helpers.ts';
+import { cli, run, makeClone, setupRemote, setupPair, killTree, waitGone } from './helpers.ts';
 import { workerPrompt, descendants, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
-  const { root, remote } = setupRemote('bigeon-worker-');
-
-  const foreman = makeClone(root, remote, 'foreman');
-  const worker = makeClone(root, remote, 'worker');
-  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
-  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify({
+  const { foreman, worker } = setupPair('bigeon-worker-', {
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
-  }));
+  });
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
     "let text='';process.stdin.on('data',(c)=>{text+=c});process.stdin.on('end',()=>{require('fs').writeFileSync('out.txt',text);console.log('fake agent saw '+text.length+' chars')});",
@@ -42,17 +37,12 @@ test('worker command runs the agent with the task on stdin, then reports the che
 });
 
 test('worker retries a failing check with the failure shown to the agent, then reports tries and agent output', () => {
-  const { root, remote } = setupRemote('bigeon-retry-');
-
-  const foreman = makeClone(root, remote, 'foreman');
-  const worker = makeClone(root, remote, 'worker');
-  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
-  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify({
+  const { foreman, worker } = setupPair('bigeon-retry-', {
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
     maxTries: 3,
-  }));
+  });
   // Agent: first run writes "bad"; if the prompt mentions a failure it writes "good".
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
@@ -76,17 +66,12 @@ test('worker retries a failing check with the failure shown to the agent, then r
 });
 
 test('worker gives up after maxTries and reports FAIL with the check errors', () => {
-  const { root, remote } = setupRemote('bigeon-giveup-');
-
-  const foreman = makeClone(root, remote, 'foreman');
-  const worker = makeClone(root, remote, 'worker');
-  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
-  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify({
+  const { foreman, worker } = setupPair('bigeon-giveup-', {
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
     maxTries: 2,
-  }));
+  });
   fs.writeFileSync(path.join(worker, 'agent.js'), "process.stdin.resume();process.stdin.on('end',()=>console.log('I tried'));");
   fs.writeFileSync(path.join(worker, 'check.js'), "console.error('nope, still broken');process.exit(1);");
 
