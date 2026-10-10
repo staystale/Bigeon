@@ -22,6 +22,8 @@ export interface Config {
   workerCommand: string;
   /** Seconds before one agent run is stopped. */
   workerTimeoutSeconds: number;
+  /** Minutes between worker heartbeat writes to status/worker.md. 0 turns the heartbeat off. */
+  heartbeatMinutes: number;
 }
 
 export type CheckStatus = 'PASS' | 'FAIL';

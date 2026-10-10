@@ -8,10 +8,28 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runCheck, formatCheck, resultNoteText, sleep, git } from './lib.ts';
-import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError } from './comms.ts';
+import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+// Turn the worker status text into one line plus an exit code for `bigeon status`.
+export function describeStatus(
+  text: string,
+  nowMs: number,
+  heartbeatMinutes: number,
+): { line: string; exitCode: number } {
+  const state = /^State: (.+)$/m.exec(text)?.[1]?.trim();
+  const lastSeen = /^Last seen: (.+)$/m.exec(text)?.[1]?.trim();
+  const seenMs = lastSeen ? Date.parse(lastSeen) : NaN;
+  if (!state || Number.isNaN(seenMs)) return { line: 'worker status unreadable', exitCode: 4 };
+  const ageMin = Math.max(0, Math.floor((nowMs - seenMs) / 60000));
+  if (state === 'stopped') return { line: `worker stopped (last seen ${ageMin} min ago)`, exitCode: 4 };
+  if (ageMin > 3 * heartbeatMinutes) {
+    return { line: `worker seems down: ${state}, last seen ${ageMin} min ago`, exitCode: 4 };
+  }
+  return { line: `worker: ${state}, last seen ${ageMin} min ago`, exitCode: 0 };
+}
 
 export function workerPrompt(
   bigeonPath: string,
@@ -271,10 +289,60 @@ function sendResult(
   fs.rmSync(markerPath, { force: true });
 }
 
+// Status text for the foreman. Version is the short commit of the Bigeon folder itself.
+function bigeonVersion(bigeonPath: string): string {
+  const result = git(['-C', path.dirname(bigeonPath), 'rev-parse', '--short', 'HEAD'], process.cwd());
+  return result.ok && result.out.trim() ? result.out.trim() : 'unknown';
+}
+
+type StatusReporter = {
+  publish: (state: string) => void;
+  heartbeat: () => void;
+  startBeat: () => NodeJS.Timeout | undefined;
+};
+
+// Writes the worker status when the state changes and again every heartbeatMinutes. Writes nothing when heartbeatMinutes is 0.
+function makeStatusReporter(projectDir: string, config: Config, bigeonPath: string): StatusReporter {
+  const version = bigeonVersion(bigeonPath);
+  const intervalMs = config.heartbeatMinutes * 60000;
+  let state = '';
+  let since = '';
+  let lastWrite = 0;
+  const write = (): void => {
+    const now = new Date();
+    lastWrite = now.getTime();
+    writeStatus(projectDir, config, [
+      `State: ${state}`,
+      `Since: ${since}`,
+      `Last seen: ${now.toISOString()}`,
+      `Version: ${version}`,
+    ].join('\n'));
+  };
+  return {
+    publish: (next: string): void => {
+      if (intervalMs <= 0) return;
+      state = next;
+      since = new Date().toISOString();
+      write();
+    },
+    heartbeat: (): void => {
+      if (intervalMs <= 0 || !state) return;
+      if (Date.now() - lastWrite >= intervalMs) write();
+    },
+    startBeat: (): NodeJS.Timeout | undefined => {
+      if (intervalMs <= 0) return undefined;
+      return setInterval(() => {
+        write();
+      }, intervalMs);
+    },
+  };
+}
+
 async function runLoop(
   projectDir: string,
   config: Config,
   bigeonPath: string,
+  status: StatusReporter,
   options: WorkerOptions = {},
 ): Promise<number> {
   const log = options.log || console.log;
@@ -283,6 +351,7 @@ async function runLoop(
   }
   let announcedWaiting = false;
   let lastMessage = '';
+  status.publish('idle');
   for (;;) {
     let note: Note | null = null;
     try {
@@ -304,6 +373,7 @@ async function runLoop(
     }
     if (!note) {
       if (options.once) return 2;
+      status.heartbeat();
       if (!announcedWaiting) log(`[bigeon] waiting for a task (checking every ${config.pollSeconds}s)...`);
       announcedWaiting = true;
       sleep(config.pollSeconds * 1000);
@@ -380,12 +450,19 @@ async function runLoop(
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
       const taskId = note.id;
       let agentPid: number | null = null;
-      const run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
-        agentPid = pid;
-        writeMarker(markerPath, taskId, pid, attempts);
-      }, (pids) => {
-        writeMarker(markerPath, taskId, agentPid, attempts, pids);
-      });
+      status.publish(`working on ${taskId} (try ${tries} of ${config.maxTries})`);
+      const beat = status.startBeat();
+      let run: AgentRun;
+      try {
+        run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
+          agentPid = pid;
+          writeMarker(markerPath, taskId, pid, attempts);
+        }, (pids) => {
+          writeMarker(markerPath, taskId, agentPid, attempts, pids);
+        });
+      } finally {
+        clearInterval(beat);
+      }
       exitText = run.exitText;
       agentSaid = agentTail(run.output);
       log(`\n[bigeon] worker agent finished (${exitText}). Running the check...`);
@@ -399,6 +476,7 @@ async function runLoop(
     const text = resultNoteText(projectDir, result, tries, summary, agentSaid, extraLinesFor(projectDir, config, stashed));
     sendResult(projectDir, config, note, markerPath, text, log);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
+    status.publish('idle');
     if (options.once) return result.status === 'PASS' ? 0 : 1;
   }
 }
@@ -435,9 +513,11 @@ export async function runWorker(
   };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
+  const status = makeStatusReporter(projectDir, config, bigeonPath);
   try {
-    return await runLoop(projectDir, config, bigeonPath, options);
+    return await runLoop(projectDir, config, bigeonPath, status, options);
   } finally {
+    status.publish('stopped');
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
     removeLock();

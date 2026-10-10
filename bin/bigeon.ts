@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
 } from '../src/lib.ts';
-import { sendNote, findNewNote, RemoteError } from '../src/comms.ts';
-import { runWorker } from '../src/worker.ts';
+import { sendNote, findNewNote, readStatus, RemoteError } from '../src/comms.ts';
+import { runWorker, describeStatus } from '../src/worker.ts';
 import type { ParsedArguments, NoteKind, Note } from '../src/types.ts';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
@@ -21,6 +21,8 @@ Usage (run inside your project):
   bigeon worker [--once]                   worker: loop forever. Wait for a task, run workerCommand
                                            (your agent, e.g. the Cline CLI) with the task on stdin,
                                            run the check, report. Needs workerCommand in the config.
+  bigeon status                            foreman: show whether the worker is idle, working or down
+                                           (exit 0 = alive, 2 = no status yet, 3 = remote unreachable, 4 = stopped or down)
   bigeon watch tasks|results [--once] [--timeout MINUTES]
                                            wait for a new note, print it, exit 0
                                            (exit 2 = nothing new, so the model is not woken, exit 3 = could not reach the remote)
@@ -71,7 +73,7 @@ async function main(): Promise<number> {
 
   const config = loadConfig(projectDir);
 
-  if (['send', 'report', 'watch', 'worker'].includes(command)) requireGit();
+  if (['send', 'report', 'watch', 'worker', 'status'].includes(command)) requireGit();
 
   if (command === 'check') {
     const result = runCheck(projectDir, config);
@@ -100,6 +102,26 @@ async function main(): Promise<number> {
 
   if (command === 'worker') {
     return await runWorker(projectDir, config, fileURLToPath(import.meta.url), { once: Boolean(flags.once) });
+  }
+
+  if (command === 'status') {
+    let text: string | null;
+    try {
+      text = readStatus(projectDir, config);
+    } catch (error) {
+      if (!(error instanceof RemoteError)) throw error;
+      console.log(error.message);
+      return 3;
+    }
+    if (text === null) {
+      console.log('no worker status yet');
+      return 2;
+    }
+    const described = describeStatus(text, Date.now(), config.heartbeatMinutes);
+    console.log(described.line);
+    const version = /^Version: .+$/m.exec(text);
+    if (version) console.log(version[0]);
+    return described.exitCode;
   }
 
   if (command === 'watch') {
