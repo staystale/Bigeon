@@ -134,6 +134,14 @@ export function sendNote(
   return noteId;
 }
 
+// The text of one note (pulled first), or null when there is no such note.
+export function readNote(projectDir: string, config: Config, kind: NoteKind, id: string): string | null {
+  const dir = ensureComms(projectDir, config);
+  pullComms(dir, config);
+  const file = path.join(dir, folderFor(kind), `${id}.md`);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+}
+
 function seenFile(projectDir: string, kind: NoteKind): string {
   return path.join(projectDir, STATE_DIR, `seen-${folderFor(kind)}.json`);
 }
