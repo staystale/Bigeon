@@ -3,8 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cli, run, makeClone, setupRemote } from './helpers.ts';
-import { workerPrompt, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
+import { spawn } from 'node:child_process';
+import { cli, run, makeClone, setupRemote, killTree, waitGone } from './helpers.ts';
+import { workerPrompt, descendants, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
@@ -184,4 +185,68 @@ test('repairMojibake leaves other lines unchanged', () => {
 
 test('agentTail repairs garbled lines', () => {
   assert.deepEqual(agentTail('Γä╣ pass 3\n'), ['ℹ pass 3']);
+});
+
+test('descendants: walks a simple tree and never returns the root', () => {
+  const pairs: Array<[number, number]> = [[11, 10], [12, 11], [13, 10], [99, 98]];
+  assert.deepEqual(descendants(10, pairs, []), [11, 12, 13]);
+  assert.deepEqual(descendants(10, pairs, [10]), [11, 12, 13]);
+});
+
+test('descendants: a known process stays listed after its parent is gone, with its children', () => {
+  const pairs: Array<[number, number]> = [[21, 5], [22, 21]];
+  assert.deepEqual(descendants(10, pairs, [20, 21]), [20, 21, 22]);
+  assert.deepEqual(descendants(10, [[31, 20]], [20]), [20, 31]);
+});
+
+test('a check timeout stops the whole check tree', async () => {
+  const { root, remote } = setupRemote('bigeon-checktimeout-');
+  const dir = makeClone(root, remote, 'proj');
+  fs.writeFileSync(path.join(dir, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js', checkTimeoutSeconds: 2 }));
+  fs.writeFileSync(path.join(dir, 'check.js'), [
+    "const { spawn } = require('child_process');",
+    "const g = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });",
+    "require('fs').writeFileSync('gc.pid', String(g.pid));",
+    'setInterval(()=>{},1000);',
+  ].join('\n'));
+  const started = Date.now();
+  const done = run('node', [cli, 'check'], dir, 20000);
+  const pidPath = path.join(dir, 'gc.pid');
+  const gcPid = fs.existsSync(pidPath) ? Number(fs.readFileSync(pidPath, 'utf8')) : 0;
+  try {
+    assert.equal(done.status, 1, done.stderr + done.stdout);
+    assert.ok(Date.now() - started < 20000);
+    assert.match(done.stdout + done.stderr, /timed out/);
+    assert.ok(gcPid > 0, 'grandchild pid was written');
+    assert.equal(await waitGone(gcPid, 5000), true);
+  } finally {
+    if (gcPid > 0) killTree(gcPid);
+  }
+});
+
+test('Ctrl+C stops an idle worker at once', { skip: process.platform === 'win32' }, async () => {
+  const { root, remote } = setupRemote('bigeon-ctrlc-');
+  const dir = makeClone(root, remote, 'worker');
+  fs.writeFileSync(path.join(dir, 'bigeon.config.json'), JSON.stringify({
+    checkCommand: 'node -e 0',
+    workerCommand: 'node -e 0',
+    pollSeconds: 30,
+  }));
+  const child = spawn('node', [cli, 'worker'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    let out = '';
+    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString(); });
+    const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+    const deadline = Date.now() + 20000;
+    while (!/waiting for a task/.test(out) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.match(out, /waiting for a task/);
+    child.kill('SIGINT');
+    const code = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
+    assert.equal(code, 130);
+    assert.equal(fs.existsSync(path.join(dir, '.bigeon', 'worker.lock')), false);
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
 });

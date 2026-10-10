@@ -1,13 +1,13 @@
 // Bigeon worker loop: wait for a task, hand it to the worker agent (visible in this terminal),
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
-import { execFile, spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, sleep, git, mainRef } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
@@ -112,26 +112,28 @@ function isRunning(pid: number): boolean {
   }
 }
 
-// Stop a process and everything it started (the shell wrapper alone is not enough).
-function killPid(pid: number): void {
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch {
-    process.kill(pid, 'SIGKILL');
-  }
-}
+let runningAgent: ChildProcess | null = null;
 
-function killTree(child: ChildProcess): void {
-  if (child.pid === undefined) return;
-  try {
-    killPid(child.pid);
-  } catch {
-    child.kill('SIGKILL');
+// Every process under rootPid, plus the already known ones and their children (a process whose parent
+// exited stays listed). Sorted, never rootPid.
+export function descendants(rootPid: number, pairs: Array<[pid: number, parent: number]>, known: number[]): number[] {
+  const children = new Map<number, number[]>();
+  for (const [pid, parent] of pairs) {
+    const list = children.get(parent);
+    if (list) list.push(pid);
+    else children.set(parent, [pid]);
   }
+  const found = new Set<number>(known.filter((pid) => pid !== rootPid));
+  const queue = [rootPid, ...found];
+  while (queue.length > 0) {
+    for (const pid of children.get(queue.pop() as number) ?? []) {
+      if (pid !== rootPid && !found.has(pid)) {
+        found.add(pid);
+        queue.push(pid);
+      }
+    }
+  }
+  return [...found].sort((a, b) => a - b);
 }
 
 // Run the agent, show its output live, and keep the last lines for the result note.
@@ -149,6 +151,7 @@ function runAgent(
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    runningAgent = child;
     if (child.pid !== undefined) onSpawn(child.pid);
     let captured = '';
     let timedOut = false;
@@ -182,27 +185,12 @@ function runAgent(
           { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
           (error, stdout) => {
             if (exited || error) return;
-            const children = new Map<number, number[]>();
+            const pairs: Array<[number, number]> = [];
             for (const line of stdout.split(/\r?\n/)) {
               const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
-              if (!match) continue;
-              const pid = Number(match[1]);
-              const parent = Number(match[2]);
-              const list = children.get(parent);
-              if (list) list.push(pid);
-              else children.set(parent, [pid]);
+              if (match) pairs.push([Number(match[1]), Number(match[2])]);
             }
-            const found = new Set<number>();
-            const queue = [rootPid];
-            while (queue.length > 0) {
-              for (const pid of children.get(queue.pop() as number) ?? []) {
-                if (pid !== rootPid && !found.has(pid)) {
-                  found.add(pid);
-                  queue.push(pid);
-                }
-              }
-            }
-            const pids = [...found].sort((a, b) => a - b);
+            const pids = descendants(rootPid, pairs, knownPids);
             if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index])) return;
             knownPids = pids;
             onTree(pids);
@@ -217,6 +205,7 @@ function runAgent(
     }
     child.on('close', (code) => {
       exited = true;
+      runningAgent = null;
       if (snapshotTimer) clearTimeout(snapshotTimer);
       clearTimeout(timer);
       resolve({ exitText: timedOut ? 'timed out' : `exit ${code}`, output: captured });
@@ -306,14 +295,14 @@ function extraLinesFor(projectDir: string, config: Config, stashed: boolean): st
 const STASH_NOTE = 'Stashed: leftovers from the interrupted run (git stash list)';
 
 // Send the result (retrying while the remote is unreachable), then mark the task seen and drop the marker.
-function sendResult(
+async function sendResult(
   projectDir: string,
   config: Config,
   note: Note,
   markerPath: string,
   text: string,
   log: (message: string) => void,
-): void {
+): Promise<void> {
   let lastSendError = '';
   for (;;) {
     try {
@@ -325,7 +314,7 @@ function sendResult(
         log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
         lastSendError = error.message;
       }
-      sleep(config.pollSeconds * 1000);
+      await new Promise((resolve) => setTimeout(resolve, config.pollSeconds * 1000));
     }
   }
   markNoteSeen(projectDir, 'task', note);
@@ -411,7 +400,7 @@ async function runLoop(
         log(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
         lastMessage = error.message;
       }
-      sleep(config.pollSeconds * 1000);
+      await new Promise((resolve) => setTimeout(resolve, config.pollSeconds * 1000));
       continue;
     }
     if (!note) {
@@ -419,7 +408,7 @@ async function runLoop(
       status.heartbeat();
       if (!announcedWaiting) log(`[bigeon] waiting for a task (checking every ${config.pollSeconds}s)...`);
       announcedWaiting = true;
-      sleep(config.pollSeconds * 1000);
+      await new Promise((resolve) => setTimeout(resolve, config.pollSeconds * 1000));
       continue;
     }
     announcedWaiting = false;
@@ -476,7 +465,7 @@ async function runLoop(
         hiddenLineCount: 0,
       };
       const giveUpText = resultNoteText(projectDir, giveUp, 0, 'gave up', undefined, extraLinesFor(projectDir, config, stashed));
-      sendResult(projectDir, config, note, markerPath, giveUpText, log);
+      await sendResult(projectDir, config, note, markerPath, giveUpText, log);
       log(`[bigeon] task ${note.id} interrupted ${attempts - 1} times, giving up`);
       if (options.once) return 1;
       continue;
@@ -509,7 +498,7 @@ async function runLoop(
       exitText = run.exitText;
       agentSaid = agentTail(run.output);
       log(`\n[bigeon] worker agent finished (${exitText}). Running the check...`);
-      result = runCheck(projectDir, config);
+      result = await runCheck(projectDir, config);
       if (result.status === 'PASS') break;
       previousFailure = formatCheck(result);
       log(`[bigeon] check failed:\n${previousFailure}`);
@@ -517,7 +506,7 @@ async function runLoop(
 
     const summary = `worker agent ${exitText}`;
     const text = resultNoteText(projectDir, result, tries, summary, agentSaid, extraLinesFor(projectDir, config, stashed));
-    sendResult(projectDir, config, note, markerPath, text, log);
+    await sendResult(projectDir, config, note, markerPath, text, log);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     status.publish('idle');
     if (options.once) return result.status === 'PASS' ? 0 : 1;
@@ -552,6 +541,7 @@ export async function runWorker(
   };
   const status = makeStatusReporter(projectDir, config, bigeonPath);
   const onSignal = (): void => {
+    if (runningAgent) killTree(runningAgent);
     status.publish('stopped');
     removeLock();
     process.exit(130);
