@@ -226,9 +226,47 @@ function runAgent(
   });
 }
 
+const CP437_HIGH =
+  'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐' +
+  '└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00A0';
+
+export function repairMojibake(line: string): string {
+  let hasHigh = false;
+  for (const char of line) {
+    if (CP437_HIGH.includes(char)) {
+      hasHigh = true;
+      break;
+    }
+  }
+  if (!hasHigh) {
+    return line;
+  }
+  const bytes: number[] = [];
+  for (const char of line) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x80) {
+      bytes.push(code);
+      continue;
+    }
+    const index = CP437_HIGH.indexOf(char);
+    if (index < 0) {
+      return line;
+    }
+    bytes.push(0x80 + index);
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+  } catch {
+    return line;
+  }
+}
+
 export function agentTail(output: string): string[] {
   const lines = output.replace(ANSI_PATTERN, '').split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
-  return lines.slice(-AGENT_TAIL_LINES).map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
+  return lines
+    .slice(-AGENT_TAIL_LINES)
+    .map(repairMojibake)
+    .map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
 }
 
 // One line saying which main commit the work is based on, and whether it is behind; null if unknown.
