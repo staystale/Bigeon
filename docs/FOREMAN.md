@@ -24,6 +24,7 @@ Talk to the worker only through notes on that repo. Do not log in to the worker 
    - PASS and small: accept, move on.
    - PASS and non-trivial: fetch and review the diff, e.g. `git fetch` then `git diff main..origin/worker/NNN`.
    - FAIL: read the errors. Write the fix yourself, or send a clearer new task. Never resend an old id.
+   - `Base:` says WARNING ... behind: the branch started from an old main. Do not merge it; send the same task again, starting from the current main.
 4. Repeat until the human's goal is met, then stop and report.
 
 ## Rules

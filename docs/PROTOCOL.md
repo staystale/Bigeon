@@ -25,6 +25,8 @@ Commit:  short hash on the work branch
 Tries:   attempts used
 Errors:  first N lines (FAIL only)
 Summary: two or three lines
+Base:    main commit the work is based on; WARNING N commit(s) behind when stale (worker loop only)
+Stashed: present when leftovers from an interrupted run were stashed (worker loop only)
 ```
 
 ## The loop
@@ -37,6 +39,13 @@ Summary: two or three lines
    - PASS and trivial: accept.
    - PASS and non-trivial: review the diff (`git diff main..worker/NNN`).
    - FAIL: read the errors, then send a fix or a clearer task.
+
+## Worker loop safety
+
+- One loop per folder: `bigeon worker` holds `.bigeon/worker.lock`. A second loop refuses to start; a lock left by a dead loop is taken over.
+- A task interrupted more than `maxTries` times is reported as FAIL ("interrupted N times, giving up") instead of being retried forever.
+- After a crash, leftover changes are stashed (`git stash list`), never deleted, and the result says so.
+- After a crash, the agent left running from that run is stopped on restart. On Windows the loop records the agent's whole process tree for this. Process ids from before a machine restart are never stopped.
 
 ## Token rules
 
