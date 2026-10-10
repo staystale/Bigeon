@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cli, run, makeClone, setupRemote } from './helpers.ts';
-import { workerPrompt } from '../src/worker.ts';
+import { workerPrompt, repairMojibake, agentTail } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
@@ -159,4 +159,19 @@ test('the worker prompt names the loop pid and forbids stopping it', () => {
   assert.match(prompt, /unless the foreman or the user tells you to/);
   assert.match(prompt, /foreground, one at a time/);
   assert.match(prompt, /Do not run the full check yourself/);
+});
+
+test('repairMojibake repairs code page 437 garbling of UTF-8', () => {
+  assert.equal(repairMojibake('Γä╣ tests 12'), 'ℹ tests 12');
+  assert.equal(repairMojibake('Γ£ö a test passes'), '✔ a test passes');
+});
+
+test('repairMojibake leaves other lines unchanged', () => {
+  for (const line of ['plain ascii', 'café', 'ℹ already fine', '日本語']) {
+    assert.equal(repairMojibake(line), line);
+  }
+});
+
+test('agentTail repairs garbled lines', () => {
+  assert.deepEqual(agentTail('Γä╣ pass 3\n'), ['ℹ pass 3']);
 });
