@@ -41,9 +41,10 @@ async function readChecks(owner: string, repo: string, sha: string): Promise<'su
 export async function accept(
   projectDir: string,
   config: Config,
-  id: string,
+  rawId: string,
   options: { dryRun?: boolean; timeoutMinutes?: number; log: (line: string) => void },
 ): Promise<number> {
+  const id = String(rawId).padStart(3, '0');
   const { log } = options;
   const { remote } = config;
   const fetched = git(['fetch', '--quiet', remote], projectDir);
@@ -66,8 +67,16 @@ export async function accept(
     log(error.message);
     return 3;
   }
-  if (note === null || !/Status: PASS/.test(note)) {
+  if (note === null || !/^Status: PASS$/m.test(note)) {
     log(`result ${id} is not PASS`);
+    return 1;
+  }
+
+  const branchHead = git(['rev-parse', branch], projectDir).out.trim();
+  const resultCommit = /^Commit:[ \t]*([0-9a-fA-F]+)[ \t]*$/m.exec(note)?.[1] ?? '';
+  if (resultCommit === '' || !branchHead.toLowerCase().startsWith(resultCommit.toLowerCase())) {
+    const shortHead = git(['rev-parse', '--short', branch], projectDir).out.trim();
+    log(`worker/${id} has changed since its result (result: ${resultCommit || 'none'}, branch: ${shortHead}), review it again`);
     return 1;
   }
 
