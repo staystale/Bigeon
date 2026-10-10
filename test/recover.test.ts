@@ -1,4 +1,4 @@
-// Recovery tests: a crashed worker must not lose its task, and a rerun starts clean.
+﻿// Recovery tests: a crashed worker must not lose its task, and a rerun starts clean.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -188,3 +188,73 @@ test('a leftover agent from a crash is stopped on restart', async () => {
   }
 });
 
+
+function setMaxTries(worker: string, maxTries: number): void {
+  const configPath = path.join(worker, 'bigeon.config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(configPath, JSON.stringify({ ...config, maxTries }));
+}
+
+test('a task interrupted more than maxTries times is reported as FAIL', async () => {
+  const { foreman, worker } = setupPair('bigeon-giveup-');
+  setMaxTries(worker, 2);
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), `require('fs').writeFileSync('started.txt','x');\n${HANG}`);
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+
+  await crashWorker(worker, foreman);
+  // The next start stashes started.txt; remove it so the second crash waits for a fresh one.
+  fs.rmSync(path.join(worker, 'started.txt'), { force: true });
+  await crashWorker(worker, foreman);
+
+  fs.writeFileSync(path.join(worker, 'agent.js'), "require('fs').writeFileSync('ran.txt','x');");
+  const again = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(again.status, 1, again.stderr + again.stdout);
+  assert.equal(fs.existsSync(path.join(worker, 'ran.txt')), false);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /Status: FAIL/);
+  assert.match(result.stdout, /interrupted 2 times, giving up/);
+});
+
+test('the result says when leftovers were stashed', async () => {
+  const { foreman, worker } = setupPair('bigeon-stashnote-');
+  setMaxTries(worker, 3);
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(
+    path.join(worker, 'agent.js'),
+    `const fs=require('fs');fs.writeFileSync('notes.txt','x');fs.writeFileSync('started.txt','x');\n${HANG}`,
+  );
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+
+  await crashWorker(worker, foreman);
+
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  const again = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(again.status, 0, again.stderr + again.stdout);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /Stashed: leftovers/);
+});
+
+test('an old pid from before a restart is not stopped', () => {
+  const { foreman, worker } = setupPair('bigeon-reboot-');
+  setMaxTries(worker, 3);
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  const child = spawn('node', ['-e', HANG], { stdio: 'ignore' });
+  try {
+    fs.mkdirSync(path.join(worker, '.bigeon'), { recursive: true });
+    fs.writeFileSync(
+      path.join(worker, '.bigeon', 'in-progress.json'),
+      JSON.stringify({ id: '001', agentPid: child.pid, attempts: 1, bootTime: 0 }),
+    );
+    assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+
+    const out = run('node', [cli, 'worker', '--once'], worker);
+    assert.equal(out.status, 0, out.stderr + out.stdout);
+    assert.match(out.stdout, /machine restarted/);
+    assert.equal(child.exitCode, null);
+    assert.doesNotThrow(() => process.kill(child.pid as number, 0));
+  } finally {
+    child.kill();
+  }
+});

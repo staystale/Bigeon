@@ -107,10 +107,12 @@ export function resultNoteText(
   tries: number,
   summary?: string,
   agentSaid?: string[],
+  extraLines?: string[],
 ): string {
   const lines = [`Status: ${checkResult.status}`, `Commit: ${currentCommit(projectDir)}`, `Tries: ${tries}`];
   if (checkResult.status === 'FAIL') lines.push('Errors:', formatCheck(checkResult));
   if (summary) lines.push(`Summary: ${summary}`);
+  if (extraLines) lines.push(...extraLines);
   if (agentSaid && agentSaid.length > 0) lines.push('Worker said:', ...agentSaid);
   return lines.join('\n');
 }
