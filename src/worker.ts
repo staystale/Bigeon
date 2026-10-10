@@ -1,7 +1,7 @@
 // Bigeon worker loop: wait for a task, hand it to the worker agent (visible in this terminal),
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import fs from 'node:fs';
@@ -55,7 +55,7 @@ export function workerPrompt(
 }
 
 // The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
-type Marker = { id: string; agentPid: number | null; attempts: number; bootTime: number };
+type Marker = { id: string; agentPid: number | null; agentPids: number[]; attempts: number; bootTime: number };
 
 function readMarker(markerPath: string): Marker {
   try {
@@ -64,12 +64,16 @@ function readMarker(markerPath: string): Marker {
       const agentPid = 'agentPid' in parsed && typeof parsed.agentPid === 'number' ? parsed.agentPid : null;
       const attempts = 'attempts' in parsed && typeof parsed.attempts === 'number' ? parsed.attempts : 0;
       const markerBoot = 'bootTime' in parsed && typeof parsed.bootTime === 'number' ? parsed.bootTime : 0;
-      return { id: parsed.id, agentPid, attempts, bootTime: markerBoot };
+      const agentPids =
+        'agentPids' in parsed && Array.isArray(parsed.agentPids)
+          ? parsed.agentPids.filter((value): value is number => typeof value === 'number')
+          : [];
+      return { id: parsed.id, agentPid, agentPids, attempts, bootTime: markerBoot };
     }
   } catch {
     // missing or unreadable marker: treat as no interruption
   }
-  return { id: '', agentPid: null, attempts: 0, bootTime: 0 };
+  return { id: '', agentPid: null, agentPids: [], attempts: 0, bootTime: 0 };
 }
 
 // When this machine started; differs by a lot after a restart.
@@ -77,8 +81,8 @@ function bootTime(): number {
   return Date.now() - os.uptime() * 1000;
 }
 
-function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number): void {
-  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, attempts, bootTime: bootTime() }));
+function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentPids: number[] = []): void {
+  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, agentPids, attempts, bootTime: bootTime() }));
 }
 
 function isRunning(pid: number): boolean {
@@ -113,7 +117,13 @@ function killTree(child: ChildProcess): void {
 }
 
 // Run the agent, show its output live, and keep the last lines for the result note.
-function runAgent(projectDir: string, config: Config, prompt: string, onSpawn: (pid: number) => void): Promise<AgentRun> {
+function runAgent(
+  projectDir: string,
+  config: Config,
+  prompt: string,
+  onSpawn: (pid: number) => void,
+  onTree: (pids: number[]) => void,
+): Promise<AgentRun> {
   return new Promise<AgentRun>((resolve) => {
     const child = spawn(config.workerCommand, {
       cwd: projectDir,
@@ -137,7 +147,59 @@ function runAgent(projectDir: string, config: Config, prompt: string, onSpawn: (
     child.on('error', (error: Error) => {
       captured += `\n${error.message}\n`;
     });
+    let exited = false;
+    let snapshotTimer: NodeJS.Timeout | undefined;
+    let knownPids: number[] = [];
+    const rootPid = child.pid;
+    if (process.platform === 'win32' && rootPid !== undefined) {
+      const snapshot = (): void => {
+        execFile(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }',
+          ],
+          { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+          (error, stdout) => {
+            if (exited || error) return;
+            const children = new Map<number, number[]>();
+            for (const line of stdout.split(/\r?\n/)) {
+              const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+              if (!match) continue;
+              const pid = Number(match[1]);
+              const parent = Number(match[2]);
+              const list = children.get(parent);
+              if (list) list.push(pid);
+              else children.set(parent, [pid]);
+            }
+            const found = new Set<number>();
+            const queue = [rootPid];
+            while (queue.length > 0) {
+              for (const pid of children.get(queue.pop() as number) ?? []) {
+                if (pid !== rootPid && !found.has(pid)) {
+                  found.add(pid);
+                  queue.push(pid);
+                }
+              }
+            }
+            const pids = [...found].sort((a, b) => a - b);
+            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index])) return;
+            knownPids = pids;
+            onTree(pids);
+          },
+        );
+      };
+      snapshotTimer = setTimeout(function tick() {
+        if (exited) return;
+        snapshot();
+        snapshotTimer = setTimeout(tick, 3000);
+      }, 1000);
+    }
     child.on('close', (code) => {
+      exited = true;
+      if (snapshotTimer) clearTimeout(snapshotTimer);
       clearTimeout(timer);
       resolve({ exitText: timedOut ? 'timed out' : `exit ${code}`, output: captured });
     });
@@ -246,13 +308,18 @@ async function runLoop(
     if (leftoverPid !== null) {
       if (Math.abs(marker.bootTime - bootTime()) >= 60000) {
         log(`[bigeon] machine restarted since the interrupted run, not stopping old pid ${leftoverPid}`);
-      } else if (isRunning(leftoverPid)) {
-        try {
-          killPid(leftoverPid);
-        } catch {
-          // already gone
+      } else {
+        const stopped: number[] = [];
+        for (const pid of [leftoverPid, ...marker.agentPids]) {
+          if (!isRunning(pid)) continue;
+          try {
+            killPid(pid);
+          } catch {
+            // already gone
+          }
+          stopped.push(pid);
         }
-        log(`[bigeon] stopped leftover agent ${leftoverPid} from an interrupted run`);
+        if (stopped.length > 0) log(`[bigeon] stopped leftover agent ${stopped.join(', ')} from an interrupted run`);
       }
     }
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -283,8 +350,12 @@ async function runLoop(
       tries += 1;
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
       const taskId = note.id;
+      let agentPid: number | null = null;
       const run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
+        agentPid = pid;
         writeMarker(markerPath, taskId, pid, attempts);
+      }, (pids) => {
+        writeMarker(markerPath, taskId, agentPid, attempts, pids);
       });
       exitText = run.exitText;
       agentSaid = agentTail(run.output);
