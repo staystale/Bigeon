@@ -81,7 +81,7 @@ async function main(): Promise<number> {
   if (['send', 'report', 'watch', 'worker', 'status', 'accept'].includes(command)) requireGit();
 
   if (command === 'check') {
-    const result = runCheck(projectDir, config);
+    const result = await runCheck(projectDir, config);
     console.log(formatCheck(result));
     return result.status === 'PASS' ? 0 : 1;
   }
@@ -97,7 +97,7 @@ async function main(): Promise<number> {
   if (command === 'report') {
     const [id] = positional;
     if (!id) throw new Error('report needs the task id, e.g. bigeon report 001');
-    const result = runCheck(projectDir, config);
+    const result = await runCheck(projectDir, config);
     const tries = typeof flags.tries === 'string' ? Number(flags.tries) : 1;
     const summary = typeof flags.summary === 'string' ? flags.summary : '';
     sendNote(projectDir, config, 'result', id, resultNoteText(projectDir, result, tries, summary));

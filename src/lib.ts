@@ -1,5 +1,6 @@
 // Bigeon core: config, git helper, and the check runner. No runtime dependencies, Node 22.18+.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config, CheckResult, GitResult } from './types.ts';
@@ -92,21 +93,73 @@ export function pickErrorLines(allLines: string[], count: number): { shown: stri
   return { shown, hidden: allLines.length - shown.length };
 }
 
+// Stop a process and everything it started (the shell wrapper alone is not enough).
+export function killPid(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    process.kill(pid, 'SIGKILL');
+  }
+}
+
+export function killTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  try {
+    killPid(child.pid);
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
+
+const CHECK_OUTPUT_CAP = 64 * 1024 * 1024;
+
 // Run the project's check command. Returns a short, token-cheap summary.
-export function runCheck(projectDir: string, config: Config): CheckResult {
+export async function runCheck(projectDir: string, config: Config): Promise<CheckResult> {
   if (!config.checkCommand) {
     throw new Error(`No checkCommand set in ${CONFIG_FILE}`);
   }
-  const run = spawnSync(config.checkCommand, {
-    cwd: projectDir,
-    shell: true,
-    encoding: 'utf8',
-    timeout: config.checkTimeoutSeconds * 1000,
-    maxBuffer: 64 * 1024 * 1024,
+  const command = config.checkCommand;
+  const run = await new Promise<{ code: number | null; text: string; timedOut: boolean }>((resolve) => {
+    const child = spawn(command, {
+      cwd: projectDir,
+      shell: true,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    let timedOut = false;
+    const collect = (stream: NodeJS.ReadableStream, which: 'out' | 'err'): void => {
+      stream.on('data', (chunk: Buffer | string) => {
+        const piece = chunk.toString();
+        if (which === 'out') {
+          if (out.length < CHECK_OUTPUT_CAP) out += piece.slice(0, CHECK_OUTPUT_CAP - out.length);
+        } else if (err.length < CHECK_OUTPUT_CAP) {
+          err += piece.slice(0, CHECK_OUTPUT_CAP - err.length);
+        }
+      });
+    };
+    collect(child.stdout, 'out');
+    collect(child.stderr, 'err');
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, config.checkTimeoutSeconds * 1000);
+    child.on('error', (error: Error) => {
+      err += `\n${error.message}\n`;
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, text: `${out}\n${err}`, timedOut });
+    });
   });
-  const timedOut = Boolean(run.error && (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-  const exitCode = timedOut ? null : run.status;
-  const combined = `${run.stdout || ''}\n${run.stderr || ''}`.replace(ANSI_PATTERN, '');
+  const timedOut = run.timedOut;
+  const exitCode = timedOut ? null : run.code;
+  const combined = run.text.replace(ANSI_PATTERN, '');
   const allLines = combined.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
 
   if (!timedOut && exitCode === 0) {
@@ -121,7 +174,6 @@ export function runCheck(projectDir: string, config: Config): CheckResult {
     hiddenLineCount: picked.hidden,
   };
 }
-
 export function formatCheck(checkResult: CheckResult): string {
   if (checkResult.status === 'PASS') return 'PASS';
   const reason = checkResult.timedOut ? 'timed out' : `exit code ${checkResult.exitCode}`;
