@@ -1,7 +1,23 @@
 // pickErrorLines: FAIL results show the failure, not the first lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickErrorLines } from '../src/lib.ts';
+import { pickErrorLines, loadConfig } from '../src/lib.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+function configDir(config?: Record<string, unknown>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bigeon-cfg-'));
+  if (config) fs.writeFileSync(path.join(dir, 'bigeon.config.json'), JSON.stringify(config));
+  return dir;
+}
+
+test('loadConfig rejects bad numbers and accepts good ones', () => {
+  assert.throws(() => loadConfig(configDir({ pollSeconds: 'abc' })), /"pollSeconds" must be a number above 0/);
+  assert.throws(() => loadConfig(configDir({ maxTries: 0 })), /"maxTries"/);
+  assert.equal(loadConfig(configDir({ heartbeatMinutes: 0 })).heartbeatMinutes, 0);
+  assert.doesNotThrow(() => loadConfig(configDir()));
+});
 
 test('pickErrorLines: strong marker window with 2 lines of context', () => {
   const lines = Array.from({ length: 30 }, (_, i) => `✔ test ${i + 1} passes`);
