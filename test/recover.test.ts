@@ -27,6 +27,12 @@ function setupPair(prefix: string): { root: string; foreman: string; worker: str
   return { root, foreman, worker };
 }
 
+function setConfig(worker: string, values: Record<string, unknown>): void {
+  const configPath = path.join(worker, 'bigeon.config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(configPath, JSON.stringify({ ...config, ...values }));
+}
+
 // Simulated crash: the worker is killed before it can report anything.
 async function crashWorker(worker: string, foreman: string, killAgent = true, ready?: () => boolean): Promise<void> {
   const child = spawn('node', [cli, 'worker', '--once'], { cwd: worker, detached: process.platform !== 'win32', stdio: 'ignore' });
@@ -158,6 +164,7 @@ test('a stale lock is taken over', () => {
 
 test('a leftover agent from a crash is stopped on restart', async () => {
   const { foreman, worker } = setupPair('bigeon-leftover-');
+  setConfig(worker, { workerTimeoutSeconds: 60 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
@@ -206,16 +213,9 @@ test('a leftover agent from a crash is stopped on restart', async () => {
   }
 });
 
-
-function setMaxTries(worker: string, maxTries: number): void {
-  const configPath = path.join(worker, 'bigeon.config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  fs.writeFileSync(configPath, JSON.stringify({ ...config, maxTries }));
-}
-
 test('a task interrupted more than maxTries times is reported as FAIL', async () => {
   const { foreman, worker } = setupPair('bigeon-giveup-');
-  setMaxTries(worker, 2);
+  setConfig(worker, { maxTries: 2 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   fs.writeFileSync(path.join(worker, 'agent.js'), `require('fs').writeFileSync('started.txt','x');\n${HANG}`);
   assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
@@ -236,7 +236,7 @@ test('a task interrupted more than maxTries times is reported as FAIL', async ()
 
 test('the result says when leftovers were stashed', async () => {
   const { foreman, worker } = setupPair('bigeon-stashnote-');
-  setMaxTries(worker, 3);
+  setConfig(worker, { maxTries: 3 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
@@ -255,7 +255,7 @@ test('the result says when leftovers were stashed', async () => {
 
 test('an old pid from before a restart is not stopped', () => {
   const { foreman, worker } = setupPair('bigeon-reboot-');
-  setMaxTries(worker, 3);
+  setConfig(worker, { maxTries: 3 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
   const child = spawn('node', ['-e', HANG], { stdio: 'ignore' });
