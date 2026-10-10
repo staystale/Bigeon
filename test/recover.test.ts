@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { cli, run, makeClone, setupRemote, killTree } from './helpers.ts';
+import { cli, run, makeClone, setupRemote, killTree, waitGone } from './helpers.ts';
 
 const HANG = "setInterval(()=>{},1000);\n";
 
@@ -156,41 +156,34 @@ test('a leftover agent from a crash is stopped on restart', async () => {
     "const { spawn } = require('child_process');\n" +
       "const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });\n" +
       "require('fs').writeFileSync('grandchild.pid', String(c.pid));\n" +
+      "require('fs').writeFileSync('agent.pid', String(process.pid));\n" +
       "require('fs').writeFileSync('started.txt','x');\n" +
       HANG,
   );
   assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
 
-  await crashWorker(worker, foreman, false);
-  const pid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
-  // The shell wrapper may already be gone; point the marker at the agent's still-running child.
-  const markerPath = path.join(worker, '.bigeon', 'in-progress.json');
-  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
-  fs.writeFileSync(markerPath, JSON.stringify({ ...marker, agentPid: pid }));
+  const pids: number[] = [];
+  try {
+    await crashWorker(worker, foreman, false);
+    const agentPid = Number(fs.readFileSync(path.join(worker, 'agent.pid'), 'utf8'));
+    const grandchildPid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
+    pids.push(agentPid, grandchildPid);
 
-  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
-  const again = run('node', [cli, 'worker', '--once'], worker);
-  assert.equal(again.status, 0, again.stderr + again.stdout);
-  assert.match(again.stdout, /stopped leftover agent/);
+    fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+    const again = run('node', [cli, 'worker', '--once'], worker);
+    assert.equal(again.status, 0, again.stderr + again.stdout);
+    assert.match(again.stdout, /stopped leftover agent/);
 
-  let running = true;
-  const deadline = Date.now() + 5000;
-  while (running && Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') running = false;
-      else await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the restart');
+    assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the restart');
+  } finally {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
     }
-  }
-  if (running) {
-    try {
-      process.kill(pid);
-    } catch {
-      // already gone
-    }
-    assert.fail('grandchild process was still running after the restart');
   }
 });
 
