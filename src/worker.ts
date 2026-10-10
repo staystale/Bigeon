@@ -213,6 +213,35 @@ export function agentTail(output: string): string[] {
   return lines.slice(-AGENT_TAIL_LINES).map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
 }
 
+// One line saying which main commit the work is based on, and whether it is behind; null if unknown.
+export function baseLine(projectDir: string, config: Config): string | null {
+  git(['fetch', '--quiet', config.remote], projectDir);
+  let mainRef = '';
+  const head = git(['symbolic-ref', '--short', `refs/remotes/${config.remote}/HEAD`], projectDir);
+  if (head.ok && head.out) {
+    mainRef = head.out;
+  } else if (git(['rev-parse', '--verify', '--quiet', `refs/remotes/${config.remote}/main`], projectDir).ok) {
+    mainRef = `${config.remote}/main`;
+  } else {
+    return null;
+  }
+  const mergeBase = git(['merge-base', 'HEAD', mainRef], projectDir);
+  if (!mergeBase.ok || !mergeBase.out) return null;
+  const base = git(['rev-parse', '--short', mergeBase.out], projectDir);
+  const behindCount = git(['rev-list', '--count', `HEAD..${mainRef}`], projectDir);
+  if (!base.ok || !behindCount.ok || !base.out || !behindCount.out) return null;
+  if (behindCount.out === '0') return `Base: ${base.out} (up to date with ${mainRef})`;
+  return `Base: ${base.out}, WARNING ${behindCount.out} commit(s) behind ${mainRef}`;
+}
+
+function extraLinesFor(projectDir: string, config: Config, stashed: boolean): string[] | undefined {
+  const lines: string[] = [];
+  const base = baseLine(projectDir, config);
+  if (base) lines.push(base);
+  if (stashed) lines.push(STASH_NOTE);
+  return lines.length > 0 ? lines : undefined;
+}
+
 const STASH_NOTE = 'Stashed: leftovers from the interrupted run (git stash list)';
 
 // Send the result (retrying while the remote is unreachable), then mark the task seen and drop the marker.
@@ -333,7 +362,7 @@ async function runLoop(
         errors: [`interrupted ${attempts - 1} times, giving up`],
         hiddenLineCount: 0,
       };
-      const giveUpText = resultNoteText(projectDir, giveUp, 0, 'gave up', undefined, stashed ? [STASH_NOTE] : undefined);
+      const giveUpText = resultNoteText(projectDir, giveUp, 0, 'gave up', undefined, extraLinesFor(projectDir, config, stashed));
       sendResult(projectDir, config, note, markerPath, giveUpText, log);
       log(`[bigeon] task ${note.id} interrupted ${attempts - 1} times, giving up`);
       if (options.once) return 1;
@@ -367,7 +396,7 @@ async function runLoop(
     }
 
     const summary = `worker agent ${exitText}`;
-    const text = resultNoteText(projectDir, result, tries, summary, agentSaid, stashed ? [STASH_NOTE] : undefined);
+    const text = resultNoteText(projectDir, result, tries, summary, agentSaid, extraLinesFor(projectDir, config, stashed));
     sendResult(projectDir, config, note, markerPath, text, log);
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
