@@ -31,8 +31,28 @@ export function loadConfig(projectDir: string): Config {
       throw new Error(`${CONFIG_FILE} is not valid JSON: ${(error as Error).message}`);
     }
   }
-  return { ...DEFAULT_CONFIG, ...userConfig };
+  const config = { ...DEFAULT_CONFIG, ...userConfig };
+  for (const [field, wording, isValid] of CONFIG_RULES) {
+    const value: unknown = config[field];
+    if (!isValid(value)) throw new Error(`${CONFIG_FILE}: "${field}" must be ${wording}, got "${String(value)}"`);
+  }
+  return config;
 }
+
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const CONFIG_RULES: [keyof Config, string, (value: unknown) => boolean][] = [
+  ['errorLines', 'a whole number of at least 1', (v) => isNumber(v) && Number.isInteger(v) && v >= 1],
+  ['maxTries', 'a whole number of at least 1', (v) => isNumber(v) && Number.isInteger(v) && v >= 1],
+  ['pollSeconds', 'a number above 0', (v) => isNumber(v) && v > 0],
+  ['checkTimeoutSeconds', 'a number above 0', (v) => isNumber(v) && v > 0],
+  ['workerTimeoutSeconds', 'a number above 0', (v) => isNumber(v) && v > 0],
+  ['heartbeatMinutes', 'a number of 0 or more', (v) => isNumber(v) && v >= 0],
+  ['checkCommand', 'text', (v) => typeof v === 'string'],
+  ['workerCommand', 'text', (v) => typeof v === 'string'],
+  ['remote', 'text', (v) => typeof v === 'string'],
+  ['commsBranch', 'text', (v) => typeof v === 'string'],
+];
 
 export function git(args: string[], workingDir?: string): GitResult {
   const result = spawnSync('git', args, { cwd: workingDir, encoding: 'utf8' });

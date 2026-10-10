@@ -54,6 +54,16 @@ function parseArguments(argumentList: string[]): ParsedArguments {
   return { positional, flags };
 }
 
+function numberFlag(flags: ParsedArguments['flags'], name: string): number | undefined {
+  const value = flags[name];
+  if (value === undefined) return undefined;
+  const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`--${name} needs a number, got "${value === true ? '' : value}"`);
+  }
+  return number;
+}
+
 function readBody(flags: ParsedArguments['flags']): string {
   if (typeof flags.text === 'string') return flags.text;
   if (typeof flags.file === 'string') return fs.readFileSync(flags.file, 'utf8');
@@ -98,7 +108,7 @@ async function main(): Promise<number> {
     const [id] = positional;
     if (!id) throw new Error('report needs the task id, e.g. bigeon report 001');
     const result = await runCheck(projectDir, config);
-    const tries = typeof flags.tries === 'string' ? Number(flags.tries) : 1;
+    const tries = numberFlag(flags, 'tries') ?? 1;
     const summary = typeof flags.summary === 'string' ? flags.summary : '';
     sendNote(projectDir, config, 'result', id, resultNoteText(projectDir, result, tries, summary));
     console.log(`Reported ${result.status} for task ${id}`);
@@ -108,7 +118,7 @@ async function main(): Promise<number> {
   if (command === 'accept') {
     const [id] = positional;
     if (!id) throw new Error('accept needs the task id, e.g. bigeon accept 001');
-    const timeoutMinutes = typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined;
+    const timeoutMinutes = numberFlag(flags, 'timeout');
     return await accept(projectDir, config, id, {
       dryRun: Boolean(flags['dry-run']),
       timeoutMinutes,
@@ -144,7 +154,8 @@ async function main(): Promise<number> {
     const [target] = positional;
     const kind: NoteKind | null = target === 'tasks' ? 'task' : target === 'results' ? 'result' : null;
     if (!kind) throw new Error('watch needs "tasks" or "results"');
-    const deadline = typeof flags.timeout === 'string' ? Date.now() + Number(flags.timeout) * 60000 : null;
+    const timeoutMinutes = numberFlag(flags, 'timeout');
+    const deadline = timeoutMinutes === undefined ? null : Date.now() + timeoutMinutes * 60000;
     let lastMessage = '';
     for (;;) {
       let note: Note | null = null;
@@ -162,7 +173,7 @@ async function main(): Promise<number> {
           console.error(`[bigeon] ${error.message} (retrying every ${config.pollSeconds}s)`);
           lastMessage = error.message;
         }
-        if (deadline && Date.now() >= deadline) return 2;
+        if (deadline && Date.now() >= deadline) return 3;
         sleep(config.pollSeconds * 1000);
         continue;
       }
