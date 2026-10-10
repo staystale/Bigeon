@@ -252,6 +252,33 @@ test('the result says when leftovers were stashed', async () => {
   const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
   assert.match(result.stdout, /Stashed: leftovers/);
 });
+test('the result says the base is up to date', () => {
+  const { foreman, worker } = setupPair('bigeon-baseok-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /Base: \w+ \(up to date with origin\/main\)/);
+});
+
+test('the result warns when the base is behind main', () => {
+  const { foreman, worker } = setupPair('bigeon-basebehind-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+  fs.writeFileSync(path.join(foreman, 'extra.txt'), 'more\n');
+  run('git', ['add', 'extra.txt'], foreman);
+  run('git', ['commit', '--quiet', '-m', 'extra'], foreman);
+  assert.equal(run('git', ['push', '--quiet', 'origin', 'HEAD:main'], foreman).status, 0);
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /WARNING 1 commit\(s\) behind origin\/main/);
+});
+
+
 
 test('an old pid from before a restart is not stopped', () => {
   const { foreman, worker } = setupPair('bigeon-reboot-');
