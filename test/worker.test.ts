@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cli, run, makeClone, setupRemote } from './helpers.ts';
-import { workerPrompt, repairMojibake, agentTail } from '../src/worker.ts';
+import { workerPrompt, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
@@ -164,6 +164,16 @@ test('the worker prompt names the loop pid and forbids stopping it', () => {
 test('repairMojibake repairs code page 437 garbling of UTF-8', () => {
   assert.equal(repairMojibake('Γä╣ tests 12'), 'ℹ tests 12');
   assert.equal(repairMojibake('Γ£ö a test passes'), '✔ a test passes');
+});
+
+test('repairMojibake repairs code page 850 garbling of UTF-8', () => {
+  assert.equal(repairMojibake('Ôä╣ tests 12'), 'ℹ tests 12');
+  assert.equal(repairMojibake('Ô£ö pass'), '✔ pass');
+});
+
+test('both code page tables have 128 characters', () => {
+  assert.equal(CP437_HIGH.length, 128);
+  assert.equal(CP850_HIGH.length, 128);
 });
 
 test('repairMojibake leaves other lines unchanged', () => {

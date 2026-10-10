@@ -226,21 +226,23 @@ function runAgent(
   });
 }
 
-const CP437_HIGH =
+export const CP437_HIGH =
   'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐' +
   '└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00A0';
 
-export function repairMojibake(line: string): string {
-  let hasHigh = false;
-  for (const char of line) {
-    if (CP437_HIGH.includes(char)) {
-      hasHigh = true;
-      break;
-    }
-  }
-  if (!hasHigh) {
-    return line;
-  }
+export const CP850_HIGH = [
+  'ÇüéâäàåçêëèïîìÄÅ',
+  'ÉæÆôöòûùÿÖÜø£Ø×ƒ',
+  'áíóúñÑªº¿®¬½¼¡«»',
+  '░▒▓│┤ÁÂÀ©╣║╗╝¢¥┐',
+  '└┴┬├─┼ãÃ╚╔╩╦╠═╬¤',
+  'ðÐÊËÈıÍÎÏ┘┌█▄¦Ì▀',
+  'ÓßÔÒõÕµþÞÚÛÙýÝ¯´',
+  '\u00AD±‗¾¶§÷¸°¨·¹³²■\u00A0',
+].join('');
+
+// Decode a line whose UTF-8 bytes were shown through a code page; returns the line if it does not fit.
+function decodeWith(line: string, table: string): string {
   const bytes: number[] = [];
   for (const char of line) {
     const code = char.codePointAt(0) ?? 0;
@@ -248,7 +250,7 @@ export function repairMojibake(line: string): string {
       bytes.push(code);
       continue;
     }
-    const index = CP437_HIGH.indexOf(char);
+    const index = table.indexOf(char);
     if (index < 0) {
       return line;
     }
@@ -259,6 +261,16 @@ export function repairMojibake(line: string): string {
   } catch {
     return line;
   }
+}
+
+export function repairMojibake(line: string): string {
+  for (const table of [CP437_HIGH, CP850_HIGH]) {
+    const repaired = decodeWith(line, table);
+    if (repaired !== line) {
+      return repaired;
+    }
+  }
+  return line;
 }
 
 export function agentTail(output: string): string[] {
