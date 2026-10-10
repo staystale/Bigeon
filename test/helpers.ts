@@ -49,3 +49,18 @@ export function killTree(pid: number): void {
     }
   }
 }
+
+// Poll every 200 ms until the process no longer exists (true) or ms run out (false).
+export async function waitGone(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
