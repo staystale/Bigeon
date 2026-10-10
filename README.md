@@ -64,6 +64,7 @@ Or `npm link` inside the bigeon folder to get a global `bigeon` command.
 | `bigeon report 001 --tries 2 --summary "..."` | worker | Run the check, write `results/001.md`, push it |
 | `bigeon watch results` | foreman | Wait for a new result, print it |
 | `bigeon send result 001 --text "..."` | either | Send a hand-written result |
+| `bigeon accept 001` | foreman | Check the result, base and CI, then push the branch to main |
 | `bigeon status` | foreman | Show whether the worker is idle, working or down |
 
 `watch` exits with code 2 when `--once` or `--timeout MINUTES` runs out with nothing new. It exits with code 3 when it cannot reach the remote; without --once it keeps retrying instead. Polling is plain

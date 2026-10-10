@@ -7,7 +7,7 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, sleep, git } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, sleep, git, mainRef } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
@@ -284,22 +284,15 @@ export function agentTail(output: string): string[] {
 // One line saying which main commit the work is based on, and whether it is behind; null if unknown.
 export function baseLine(projectDir: string, config: Config): string | null {
   git(['fetch', '--quiet', config.remote], projectDir);
-  let mainRef = '';
-  const head = git(['symbolic-ref', '--short', `refs/remotes/${config.remote}/HEAD`], projectDir);
-  if (head.ok && head.out) {
-    mainRef = head.out;
-  } else if (git(['rev-parse', '--verify', '--quiet', `refs/remotes/${config.remote}/main`], projectDir).ok) {
-    mainRef = `${config.remote}/main`;
-  } else {
-    return null;
-  }
-  const mergeBase = git(['merge-base', 'HEAD', mainRef], projectDir);
+  const main = mainRef(projectDir, config.remote);
+  if (!main) return null;
+  const mergeBase = git(['merge-base', 'HEAD', main], projectDir);
   if (!mergeBase.ok || !mergeBase.out) return null;
   const base = git(['rev-parse', '--short', mergeBase.out], projectDir);
-  const behindCount = git(['rev-list', '--count', `HEAD..${mainRef}`], projectDir);
+  const behindCount = git(['rev-list', '--count', `HEAD..${main}`], projectDir);
   if (!base.ok || !behindCount.ok || !base.out || !behindCount.out) return null;
-  if (behindCount.out === '0') return `Base: ${base.out} (up to date with ${mainRef})`;
-  return `Base: ${base.out}, WARNING ${behindCount.out} commit(s) behind ${mainRef}`;
+  if (behindCount.out === '0') return `Base: ${base.out} (up to date with ${main})`;
+  return `Base: ${base.out}, WARNING ${behindCount.out} commit(s) behind ${main}`;
 }
 
 function extraLinesFor(projectDir: string, config: Config, stashed: boolean): string[] | undefined {

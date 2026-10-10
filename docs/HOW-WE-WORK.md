@@ -86,8 +86,9 @@ bigeon watch results --timeout 20
 1. The worker pushes `worker/NNN` and reports PASS or FAIL.
 2. GitHub runs the check on `worker/NNN` (a minute or two).
 3. The foreman reviews `git diff origin/main origin/worker/NNN`.
-4. If it is good and green, the foreman moves it: `git push origin <commit>:main`.
-   GitHub refuses the push if the check did not pass.
+4. If it is good and green, the foreman moves it with `bigeon accept NNN`. It checks the result note,
+   that the branch is on top of main and the CI result, then pushes the commit to main.
+   GitHub still refuses the push if the check did not pass.
 
 ## Habits
 

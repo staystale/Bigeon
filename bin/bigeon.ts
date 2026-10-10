@@ -7,6 +7,7 @@ import {
 } from '../src/lib.ts';
 import { sendNote, findNewNote, readStatus, RemoteError } from '../src/comms.ts';
 import { runWorker, describeStatus } from '../src/worker.ts';
+import { accept } from '../src/accept.ts';
 import type { ParsedArguments, NoteKind, Note } from '../src/types.ts';
 
 const HELP = `Bigeon - a carrier pigeon for code. Passes short notes between agents through git.
@@ -26,6 +27,10 @@ Usage (run inside your project):
   bigeon watch tasks|results [--once] [--timeout MINUTES]
                                            wait for a new note, print it, exit 0
                                            (exit 2 = nothing new, so the model is not woken, exit 3 = could not reach the remote)
+  bigeon accept NNN [--dry-run] [--timeout MINUTES]
+                                            foreman: check the result, base and CI of worker/NNN, then push it to main
+                                            (exit 0 = accepted, 1 = refused, 3 = could not reach the remote,
+                                            5 = CI still running after the timeout, default 15 minutes)
 `;
 
 function parseArguments(argumentList: string[]): ParsedArguments {
@@ -73,7 +78,7 @@ async function main(): Promise<number> {
 
   const config = loadConfig(projectDir);
 
-  if (['send', 'report', 'watch', 'worker', 'status'].includes(command)) requireGit();
+  if (['send', 'report', 'watch', 'worker', 'status', 'accept'].includes(command)) requireGit();
 
   if (command === 'check') {
     const result = runCheck(projectDir, config);
@@ -98,6 +103,17 @@ async function main(): Promise<number> {
     sendNote(projectDir, config, 'result', id, resultNoteText(projectDir, result, tries, summary));
     console.log(`Reported ${result.status} for task ${id}`);
     return result.status === 'PASS' ? 0 : 1;
+  }
+
+  if (command === 'accept') {
+    const [id] = positional;
+    if (!id) throw new Error('accept needs the task id, e.g. bigeon accept 001');
+    const timeoutMinutes = typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined;
+    return await accept(projectDir, config, id, {
+      dryRun: Boolean(flags['dry-run']),
+      timeoutMinutes,
+      log: (line) => console.log(line),
+    });
   }
 
   if (command === 'worker') {

@@ -42,6 +42,16 @@ export function git(args: string[], workingDir?: string): GitResult {
   };
 }
 
+// The remote's main branch as a ref name (e.g. origin/main); null if it cannot be found.
+export function mainRef(projectDir: string, remote: string): string | null {
+  const head = git(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], projectDir);
+  if (head.ok && head.out) return head.out;
+  if (git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main`], projectDir).ok) {
+    return `${remote}/main`;
+  }
+  return null;
+}
+
 // Stop early with a plain message if git cannot be run (common after installing git: the terminal
 // that was already open does not know about it until it is closed and reopened).
 export function requireGit(): void {
