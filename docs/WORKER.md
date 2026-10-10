@@ -33,5 +33,7 @@ and reports for you: skip steps 1 and 6 below and do not run `bigeon report` or 
 - Never stop the bigeon worker loop, or any process you did not start, unless the foreman or the user tells you to.
   Never stop processes by name or by matching command lines (e.g. all `node` processes): that can kill the loop running you.
 - Run tests and checks in the foreground, one at a time. No background runs, no two runs at once.
+- If your shell stops long commands (Cline stops them after about 30 seconds), run only quick checks while
+  working, such as the type check or one test file. When started by `bigeon worker`, the loop runs the full check for you.
 - Never put keys, tokens or secret URLs in code, commits or notes.
 - If the task is unclear, report FAIL with a one-line question in the summary instead of guessing.

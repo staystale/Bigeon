@@ -158,4 +158,5 @@ test('the worker prompt names the loop pid and forbids stopping it', () => {
   assert.match(prompt, new RegExp(`worker loop running you has pid ${process.pid}`));
   assert.match(prompt, /unless the foreman or the user tells you to/);
   assert.match(prompt, /foreground, one at a time/);
+  assert.match(prompt, /Do not run the full check yourself/);
 });
