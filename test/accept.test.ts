@@ -37,7 +37,7 @@ test('summarizeChecks reads a check-runs response', () => {
 });
 
 // A foreman clone plus a worker branch worker/001 (one commit on top of main) and a result note.
-function setup(resultText: string): { root: string; remote: string; foreman: string; branchSha: string } {
+function setup(resultText: string): { root: string; remote: string; foreman: string; branchSha: string; worker: string } {
   const { root, remote } = setupRemote('bigeon-accept-');
   const foreman = makeClone(root, remote, 'foreman');
   fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
@@ -48,9 +48,10 @@ function setup(resultText: string): { root: string; remote: string; foreman: str
   run('git', ['commit', '--quiet', '-m', 'feature'], worker);
   run('git', ['push', '--quiet', 'origin', 'worker/001'], worker);
   const branchSha = run('git', ['rev-parse', 'HEAD'], worker).stdout.trim();
-  const sent = run('node', [cli, 'send', 'result', '001', '--text', resultText], foreman);
+  const text = `${resultText}Commit: ${branchSha.slice(0, 7)}\n`;
+  const sent = run('node', [cli, 'send', 'result', '001', '--text', text], foreman);
   assert.equal(sent.status, 0, sent.stderr);
-  return { root, remote, foreman, branchSha };
+  return { root, remote, foreman, branchSha, worker };
 }
 
 function remoteMain(remote: string, root: string): string {
@@ -63,6 +64,27 @@ test('accept pushes a PASS branch on top of main', () => {
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(result.stdout, /accepted 001/);
   assert.equal(remoteMain(remote, root), branchSha);
+});
+
+test('accept pads a short id to three digits', () => {
+  const { root, remote, foreman, branchSha } = setup('Status: PASS\n');
+  const result = run('node', [cli, 'accept', '1'], foreman);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /accepted 001/);
+  assert.equal(remoteMain(remote, root), branchSha);
+});
+
+test('accept refuses a branch that changed after its result', () => {
+  const { root, remote, foreman, worker } = setup('Status: PASS\n');
+  fs.writeFileSync(path.join(worker, 'extra.txt'), 'extra\n');
+  run('git', ['add', '.'], worker);
+  run('git', ['commit', '--quiet', '-m', 'extra'], worker);
+  run('git', ['push', '--quiet', 'origin', 'worker/001'], worker);
+  const before = remoteMain(remote, root);
+  const result = run('node', [cli, 'accept', '001'], foreman);
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.match(result.stdout, /has changed since its result/);
+  assert.equal(remoteMain(remote, root), before);
 });
 
 test('accept refuses a FAIL result', () => {
