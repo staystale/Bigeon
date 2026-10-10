@@ -54,32 +54,47 @@ export function workerPrompt(
 }
 
 // The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
-function readMarkerId(markerPath: string): string {
+function readMarker(markerPath: string): { id: string; agentPid: number | null } {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
-    if (typeof parsed === 'object' && parsed !== null && 'id' in parsed && typeof parsed.id === 'string') return parsed.id;
+    if (typeof parsed === 'object' && parsed !== null && 'id' in parsed && typeof parsed.id === 'string') {
+      const agentPid = 'agentPid' in parsed && typeof parsed.agentPid === 'number' ? parsed.agentPid : null;
+      return { id: parsed.id, agentPid };
+    }
   } catch {
     // missing or unreadable marker: treat as no interruption
   }
-  return '';
+  return { id: '', agentPid: null };
 }
 
-// Stop the child and everything it started (the shell wrapper alone is not enough).
-function killTree(child: ChildProcess): void {
-  if (child.pid === undefined) return;
+function readMarkerId(markerPath: string): string {
+  return readMarker(markerPath).id;
+}
+
+// Stop a process and everything it started (the shell wrapper alone is not enough).
+function killPid(pid: number): void {
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
     return;
   }
   try {
-    process.kill(-child.pid, 'SIGKILL');
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    process.kill(pid, 'SIGKILL');
+  }
+}
+
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  try {
+    killPid(child.pid);
   } catch {
     child.kill('SIGKILL');
   }
 }
 
 // Run the agent, show its output live, and keep the last lines for the result note.
-function runAgent(projectDir: string, config: Config, prompt: string): Promise<AgentRun> {
+function runAgent(projectDir: string, config: Config, prompt: string, onSpawn: (pid: number) => void): Promise<AgentRun> {
   return new Promise<AgentRun>((resolve) => {
     const child = spawn(config.workerCommand, {
       cwd: projectDir,
@@ -87,6 +102,7 @@ function runAgent(projectDir: string, config: Config, prompt: string): Promise<A
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    if (child.pid !== undefined) onSpawn(child.pid);
     let captured = '';
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -116,7 +132,7 @@ export function agentTail(output: string): string[] {
   return lines.slice(-AGENT_TAIL_LINES).map((line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line));
 }
 
-export async function runWorker(
+async function runLoop(
   projectDir: string,
   config: Config,
   bigeonPath: string,
@@ -174,8 +190,17 @@ export async function runWorker(
       log(`[bigeon] stashing leftovers from interrupted task ${note.id} (git stash list to recover)`);
       git(['stash', 'push', '--include-untracked', '--quiet', '-m', `bigeon: leftovers from interrupted task ${note.id}`], projectDir);
     }
+    const leftoverPid = readMarker(markerPath).agentPid;
+    if (leftoverPid !== null) {
+      try {
+        killPid(leftoverPid);
+      } catch {
+        // already gone
+      }
+      log(`[bigeon] stopped leftover agent ${leftoverPid} from an interrupted run`);
+    }
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, JSON.stringify({ id: note.id }));
+    fs.writeFileSync(markerPath, JSON.stringify({ id: note.id, agentPid: null }));
 
     // Assigned in the loop below (original code assumed maxTries >= 1).
     let result!: CheckResult;
@@ -186,7 +211,10 @@ export async function runWorker(
     while (tries < config.maxTries) {
       tries += 1;
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
-      const run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure));
+      const taskId = note.id;
+      const run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
+        fs.writeFileSync(markerPath, JSON.stringify({ id: taskId, agentPid: pid }));
+      });
       exitText = run.exitText;
       agentSaid = agentTail(run.output);
       log(`\n[bigeon] worker agent finished (${exitText}). Running the check...`);
@@ -216,5 +244,55 @@ export async function runWorker(
     fs.rmSync(markerPath, { force: true });
     log(`[bigeon] reported ${result.status} for task ${note.id} after ${tries} ${tries === 1 ? 'try' : 'tries'}`);
     if (options.once) return result.status === 'PASS' ? 0 : 1;
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export async function runWorker(
+  projectDir: string,
+  config: Config,
+  bigeonPath: string,
+  options: WorkerOptions = {},
+): Promise<number> {
+  const log = options.log || console.log;
+  const lockPath = path.join(projectDir, '.bigeon', 'worker.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  if (fs.existsSync(lockPath)) {
+    let otherPid = 0;
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      if (typeof parsed === 'object' && parsed !== null && 'pid' in parsed && typeof parsed.pid === 'number') otherPid = parsed.pid;
+    } catch {
+      // unreadable lock: treat as stale
+    }
+    if (otherPid > 0 && isRunning(otherPid)) {
+      throw new Error(`another bigeon worker is already running in this folder (pid ${otherPid})`);
+    }
+    log('[bigeon] took over a stale lock');
+  }
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid }));
+  const removeLock = (): void => {
+    fs.rmSync(lockPath, { force: true });
+  };
+  const onSignal = (): void => {
+    removeLock();
+    process.exit(130);
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  try {
+    return await runLoop(projectDir, config, bigeonPath, options);
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    removeLock();
   }
 }

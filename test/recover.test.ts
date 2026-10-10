@@ -123,3 +123,68 @@ test('uncommitted work is left alone when nothing was interrupted', () => {
   assert.equal(fs.existsSync(path.join(worker, 'notes.txt')), true);
   assert.doesNotMatch(out.stdout, /stashing leftovers/);
 });
+
+test('a second worker in the same folder refuses to start', () => {
+  const { worker } = setupPair('bigeon-lock-');
+  fs.mkdirSync(path.join(worker, '.bigeon'), { recursive: true });
+  fs.writeFileSync(path.join(worker, '.bigeon', 'worker.lock'), JSON.stringify({ pid: process.pid }));
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.notEqual(out.status, 0);
+  assert.match(out.stderr, /already running/);
+});
+
+test('a stale lock is taken over', () => {
+  const { foreman, worker } = setupPair('bigeon-stale-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
+  fs.mkdirSync(path.join(worker, '.bigeon'), { recursive: true });
+  fs.writeFileSync(path.join(worker, '.bigeon', 'worker.lock'), JSON.stringify({ pid: 999999 }));
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  assert.match(out.stdout, /took over a stale lock/);
+  assert.equal(fs.existsSync(path.join(worker, '.bigeon', 'worker.lock')), false);
+});
+
+test('a leftover agent from a crash is stopped on restart', async () => {
+  const { foreman, worker } = setupPair('bigeon-leftover-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(
+    path.join(worker, 'agent.js'),
+    "const { spawn } = require('child_process');\n" +
+      "const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });\n" +
+      "require('fs').writeFileSync('grandchild.pid', String(c.pid));\n" +
+      "require('fs').writeFileSync('started.txt','x');\n" +
+      HANG,
+  );
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
+
+  await crashWorker(worker, foreman);
+  const pid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
+
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  const again = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(again.status, 0, again.stderr + again.stdout);
+  assert.match(again.stdout, /stopped leftover agent/);
+
+  let running = true;
+  const deadline = Date.now() + 5000;
+  while (running && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') running = false;
+      else await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  if (running) {
+    try {
+      process.kill(pid);
+    } catch {
+      // already gone
+    }
+    assert.fail('grandchild process was still running after the restart');
+  }
+});
+
