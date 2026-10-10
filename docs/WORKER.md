@@ -30,5 +30,8 @@ and reports for you: skip steps 1 and 6 below and do not run `bigeon report` or 
 - Never edit files outside the task's scope.
 - Never write to the `tasks/` folder. Only the foreman does.
 - Never push to `main`. Only `worker/NNN`.
+- Never stop the bigeon worker loop, or any process you did not start, unless the foreman or the user tells you to.
+  Never stop processes by name or by matching command lines (e.g. all `node` processes): that can kill the loop running you.
+- Run tests and checks in the foreground, one at a time. No background runs, no two runs at once.
 - Never put keys, tokens or secret URLs in code, commits or notes.
 - If the task is unclear, report FAIL with a one-line question in the summary instead of guessing.
