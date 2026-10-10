@@ -28,7 +28,7 @@ function setupPair(prefix: string): { root: string; foreman: string; worker: str
 }
 
 // Simulated crash: the worker is killed before it can report anything.
-async function crashWorker(worker: string, foreman: string, killAgent = true): Promise<void> {
+async function crashWorker(worker: string, foreman: string, killAgent = true, ready?: () => boolean): Promise<void> {
   const child = spawn('node', [cli, 'worker', '--once'], { cwd: worker, detached: process.platform !== 'win32', stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   const started = path.join(worker, 'started.txt');
@@ -37,11 +37,19 @@ async function crashWorker(worker: string, foreman: string, killAgent = true): P
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const appeared = fs.existsSync(started);
+  let isReady = true;
+  if (ready) {
+    while (!ready() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    isReady = ready();
+  }
   // killAgent false: only the worker dies, so its agent is left running like a real crash.
   if (killAgent) killTree(child.pid as number);
   else child.kill('SIGKILL');
   await exited;
   assert.equal(appeared, true, 'agent never wrote started.txt');
+  assert.equal(isReady, true, 'crash condition never became ready');
   assert.equal(run('node', [cli, 'watch', 'results', '--once'], foreman).status, 2);
 }
 
@@ -164,7 +172,18 @@ test('a leftover agent from a crash is stopped on restart', async () => {
 
   const pids: number[] = [];
   try {
-    await crashWorker(worker, foreman, false);
+    // On Windows wait until the marker has recorded the agent's process tree.
+    const treeRecorded = (): boolean => {
+      try {
+        const marker: unknown = JSON.parse(fs.readFileSync(path.join(worker, '.bigeon', 'in-progress.json'), 'utf8'));
+        const recorded = (marker as { agentPids?: unknown }).agentPids;
+        const agent = Number(fs.readFileSync(path.join(worker, 'agent.pid'), 'utf8'));
+        return Array.isArray(recorded) && recorded.includes(agent);
+      } catch {
+        return false;
+      }
+    };
+    await crashWorker(worker, foreman, false, process.platform === 'win32' ? treeRecorded : undefined);
     const agentPid = Number(fs.readFileSync(path.join(worker, 'agent.pid'), 'utf8'));
     const grandchildPid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
     pids.push(agentPid, grandchildPid);
