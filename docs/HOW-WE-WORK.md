@@ -70,7 +70,7 @@ Worker PC, in the project clone (leave the window open):
 ```
 node ..\Bigeon\bin\bigeon.ts worker
 ```
-After Bigeon itself is updated (`git pull` in the Bigeon folder), restart it: Ctrl+C, then the same command.
+After Bigeon itself is updated (`git pull` in the Bigeon folder), restart it: Ctrl+C, then the same command. Only one loop can run per folder; if it says another worker is already running, close that window first.
 
 Foreman, in its project clone:
 ```
