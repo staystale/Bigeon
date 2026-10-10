@@ -93,7 +93,7 @@ export function mustGit(args: string[], workingDir?: string): string {
   return result.out;
 }
 
-const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
+export const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 const STRONG_MARKER = /✖|^\s*not ok\b|\bFAIL\b|Error:|AssertionError|Traceback|panic:/;
 const WEAK_MARKER = /error|fail/i;

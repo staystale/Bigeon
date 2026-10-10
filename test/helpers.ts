@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { killPid } from '../src/lib.ts';
 
 export const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'bigeon.ts');
 
@@ -20,9 +21,27 @@ export function makeClone(root: string, remote: string, name: string): string {
   return dir;
 }
 
+export function bigeon(cwd: string, ...args: string[]): SpawnSyncReturns<string> {
+  return run('node', [cli, ...args], cwd);
+}
+
+const tempRoots: string[] = [];
+
+// Remove every temp folder made by setupRemote when the test process ends.
+process.on('exit', () => {
+  for (const root of tempRoots) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // ignore failures
+    }
+  }
+});
+
 // A temp folder with a bare remote whose main branch holds one seed commit.
 export function setupRemote(prefix: string): { root: string; remote: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempRoots.push(root);
   const remote = path.join(root, 'remote.git');
   run('git', ['init', '--quiet', '--bare', '--initial-branch=main', remote], root);
   const seed = makeClone(root, remote, 'seed');
@@ -33,20 +52,32 @@ export function setupRemote(prefix: string): { root: string; remote: string } {
   return { root, remote };
 }
 
+// A foreman and a worker clone; the worker gets `config` as its bigeon.config.json.
+export function setupPair(
+  prefix: string,
+  config?: Record<string, unknown>,
+): { root: string; foreman: string; worker: string } {
+  const { root, remote } = setupRemote(prefix);
+  const foreman = makeClone(root, remote, 'foreman');
+  const worker = makeClone(root, remote, 'worker');
+  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
+  if (config !== undefined) fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify(config));
+  return { root, foreman, worker };
+}
+
+// Merge values into a worker's bigeon.config.json.
+export function setConfig(worker: string, values: Record<string, unknown>): void {
+  const configPath = path.join(worker, 'bigeon.config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(configPath, JSON.stringify({ ...config, ...values }));
+}
+
 // Kill a process and all its children (the worker and the agent it started).
 export function killTree(pid: number): void {
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    return;
-  }
   try {
-    process.kill(-pid, 'SIGKILL');
+    killPid(pid);
   } catch {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // already gone
-    }
+    // already gone
   }
 }
 

@@ -4,33 +4,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { cli, run, makeClone, setupRemote, killTree, waitGone } from './helpers.ts';
+import { cli, run, setupPair as sharedSetupPair, setConfig, killTree, waitGone } from './helpers.ts';
 
 const HANG = "setInterval(()=>{},1000);\n";
 
 function setupPair(prefix: string): { root: string; foreman: string; worker: string } {
-  const { root, remote } = setupRemote(prefix);
-  const foreman = makeClone(root, remote, 'foreman');
-  const worker = makeClone(root, remote, 'worker');
-  // Test scaffolding is ignored (committed locally only) so a stash of leftovers leaves it in place.
-  fs.writeFileSync(path.join(worker, '.gitignore'), 'agent.js\ncheck.js\nbigeon.config.json\n.bigeon/\n');
-  run('git', ['add', '.gitignore'], worker);
-  run('git', ['commit', '--quiet', '-m', 'ignore scaffolding'], worker);
-  fs.writeFileSync(path.join(foreman, 'bigeon.config.json'), JSON.stringify({ checkCommand: 'node check.js' }));
-  fs.writeFileSync(path.join(worker, 'bigeon.config.json'), JSON.stringify({
+  const { root, foreman, worker } = sharedSetupPair(prefix, {
     checkCommand: 'node check.js',
     workerCommand: 'node agent.js',
     pollSeconds: 1,
     maxTries: 3,
     workerTimeoutSeconds: 2,
-  }));
+  });
+  // Test scaffolding is ignored (committed locally only) so a stash of leftovers leaves it in place.
+  fs.writeFileSync(path.join(worker, '.gitignore'), 'agent.js\ncheck.js\nbigeon.config.json\n.bigeon/\n');
+  run('git', ['add', '.gitignore'], worker);
+  run('git', ['commit', '--quiet', '-m', 'ignore scaffolding'], worker);
   return { root, foreman, worker };
-}
-
-function setConfig(worker: string, values: Record<string, unknown>): void {
-  const configPath = path.join(worker, 'bigeon.config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  fs.writeFileSync(configPath, JSON.stringify({ ...config, ...values }));
 }
 
 // Simulated crash: the worker is killed before it can report anything.
