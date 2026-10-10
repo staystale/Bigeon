@@ -6,6 +6,7 @@ Rules both agents follow. Keep notes short: they cost tokens every time they are
 
 - **Foreman** writes `tasks/NNN.md`. Never writes `results/`.
 - **Worker** writes `results/NNN.md` and commits code on its own branch, e.g. `worker/NNN`. Never writes `tasks/`.
+- **Worker** also writes `status/worker.md` (heartbeat). Never edit it by hand.
 - One id links a task to its result (`tasks/001.md` is answered by `results/001.md`).
 
 ## Task note

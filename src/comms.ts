@@ -70,6 +70,45 @@ function nextTaskId(dir: string): string {
   return padId((taken.length ? Math.max(...taken) : 0) + 1);
 }
 
+// Commit one file (only if changed) and push it, retrying after a pull.
+function commitAndPush(dir: string, config: Config, relativePath: string, message: string): void {
+  mustGit(['add', relativePath], dir);
+  // A retry after a failed push finds the note already committed.
+  if (!git(['diff', '--cached', '--quiet'], dir).ok) {
+    mustGit(['commit', '--quiet', '-m', message], dir);
+  }
+
+  if (!hasRemote(dir, config)) return;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (git(['push', '--quiet', config.remote, config.commsBranch], dir).ok) return;
+    pullComms(dir, config);
+  }
+  throw new Error('Could not push the note after 3 attempts');
+}
+
+const STATUS_FILE = path.join('status', 'worker.md');
+
+// Write the worker's status file. Never throws: a status write must not stop the loop.
+export function writeStatus(projectDir: string, config: Config, text: string): void {
+  try {
+    const dir = ensureComms(projectDir, config);
+    pullComms(dir, config);
+    fs.mkdirSync(path.join(dir, 'status'), { recursive: true });
+    fs.writeFileSync(path.join(dir, STATUS_FILE), text.endsWith('\n') ? text : `${text}\n`);
+    commitAndPush(dir, config, STATUS_FILE, 'bigeon: worker status');
+  } catch {
+    // ignored on purpose, including RemoteError
+  }
+}
+
+// The worker's status text, or null when there is none yet.
+export function readStatus(projectDir: string, config: Config): string | null {
+  const dir = ensureComms(projectDir, config);
+  pullComms(dir, config);
+  const file = path.join(dir, STATUS_FILE);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+}
+
 // Write a note, commit it and push it. Returns the note's id.
 export function sendNote(
   projectDir: string,
@@ -91,18 +130,8 @@ export function sendNote(
   }
   const relativePath = path.join(folder, `${noteId}.md`);
   fs.writeFileSync(path.join(dir, relativePath), text.endsWith('\n') ? text : `${text}\n`);
-  mustGit(['add', relativePath], dir);
-  // A retry after a failed push finds the note already committed.
-  if (!git(['diff', '--cached', '--quiet'], dir).ok) {
-    mustGit(['commit', '--quiet', '-m', `bigeon: ${kind} ${noteId}`], dir);
-  }
-
-  if (!hasRemote(dir, config)) return noteId;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    if (git(['push', '--quiet', config.remote, config.commsBranch], dir).ok) return noteId;
-    pullComms(dir, config);
-  }
-  throw new Error('Could not push the note after 3 attempts');
+  commitAndPush(dir, config, relativePath, `bigeon: ${kind} ${noteId}`);
+  return noteId;
 }
 
 function seenFile(projectDir: string, kind: NoteKind): string {

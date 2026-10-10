@@ -14,6 +14,7 @@ export const DEFAULT_CONFIG: Config = {
   checkTimeoutSeconds: 300,
   workerCommand: '',
   workerTimeoutSeconds: 900,
+  heartbeatMinutes: 10,
 };
 
 export const CONFIG_FILE = 'bigeon.config.json';
