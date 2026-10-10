@@ -45,7 +45,8 @@ test('foreman sends a task, worker fails then passes, foreman reads results', ()
   assert.equal(failing.status, 1);
   assert.match(failing.stdout, /FAIL \(exit code 1\)/);
   assert.match(failing.stdout, /more lines hidden/);
-  assert.doesNotMatch(failing.stdout, /line3/);
+  assert.match(failing.stdout, /line3/);
+  assert.doesNotMatch(failing.stdout, /line1/);
 
   // Worker reports the failure.
   assert.equal(bigeon(worker, 'report', '001', '--tries', '3').status, 1);
