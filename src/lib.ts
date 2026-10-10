@@ -74,6 +74,24 @@ export function mustGit(args: string[], workingDir?: string): string {
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
+const STRONG_MARKER = /✖|^\s*not ok\b|\bFAIL\b|Error:|AssertionError|Traceback|panic:/;
+const WEAK_MARKER = /error|fail/i;
+const ZERO_SUMMARY = /\b(fail|failed|failures|errors?)\s*[:=]?\s*0\b/i;
+
+// Pick the lines that show the failure: a window starting 2 lines before the
+// first strong (else weak) marker, or the last `count` lines if none match.
+export function pickErrorLines(allLines: string[], count: number): { shown: string[]; hidden: number } {
+  let found = allLines.findIndex((line) => STRONG_MARKER.test(line));
+  if (found < 0) {
+    found = allLines.findIndex((line) => WEAK_MARKER.test(line) && !ZERO_SUMMARY.test(line));
+  }
+  const shown =
+    found >= 0
+      ? allLines.slice(Math.max(0, found - 2), Math.max(0, found - 2) + count)
+      : allLines.slice(Math.max(0, allLines.length - count));
+  return { shown, hidden: allLines.length - shown.length };
+}
+
 // Run the project's check command. Returns a short, token-cheap summary.
 export function runCheck(projectDir: string, config: Config): CheckResult {
   if (!config.checkCommand) {
@@ -94,13 +112,13 @@ export function runCheck(projectDir: string, config: Config): CheckResult {
   if (!timedOut && exitCode === 0) {
     return { status: 'PASS', exitCode, timedOut: false, errors: [], hiddenLineCount: 0 };
   }
-  const shown = allLines.slice(0, config.errorLines);
+  const picked = pickErrorLines(allLines, config.errorLines);
   return {
     status: 'FAIL',
     exitCode,
     timedOut,
-    errors: shown,
-    hiddenLineCount: Math.max(0, allLines.length - shown.length),
+    errors: picked.shown,
+    hiddenLineCount: picked.hidden,
   };
 }
 
