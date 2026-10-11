@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Config, CheckResult, GitResult } from './types.ts';
 
 export const DEFAULT_CONFIG: Config = {
@@ -306,4 +307,39 @@ export function initProject(projectDir: string): string[] {
     created.push(`.gitignore (+${entry})`);
   }
   return created;
+}
+
+export type BigeonUpdate = { version: string; behind: number | null };
+
+// Bigeon's own version (short commit) and how many commits it is behind its upstream. Never throws.
+export function bigeonUpdate(bigeonDir: string): BigeonUpdate {
+  let version = 'unknown';
+  let behind: number | null = null;
+  try {
+    const head = git(['-C', bigeonDir, 'rev-parse', '--short', 'HEAD']);
+    if (head.ok && head.out) version = head.out;
+    if (git(['-C', bigeonDir, 'fetch', '--quiet']).ok) {
+      const count = git(['-C', bigeonDir, 'rev-list', '--count', 'HEAD..@{u}']);
+      const number = Number(count.out);
+      if (count.ok && count.out !== '' && Number.isInteger(number) && number >= 0) behind = number;
+    }
+  } catch {
+    // keep what we have
+  }
+  return { version, behind };
+}
+
+// The repo root of the running Bigeon (this file is in src/).
+export const BIGEON_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+export function versionLine(update: BigeonUpdate, bigeonDir: string = BIGEON_DIR): string {
+  if (update.behind === null) return `Bigeon ${update.version}`;
+  if (update.behind === 0) return `Bigeon ${update.version} (up to date)`;
+  return `Bigeon ${update.version}: UPDATE AVAILABLE (${update.behind} new commits). Run git pull in ${bigeonDir}, then restart.`;
+}
+
+export function updateStatusLine(update: BigeonUpdate): string {
+  if (update.behind === null) return 'Update: unknown';
+  if (update.behind === 0) return 'Update: none';
+  return `Update: available (${update.behind} new commits)`;
 }

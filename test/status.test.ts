@@ -70,6 +70,7 @@ test('status says stopped after the loop ends', () => {
   const status = run('node', [cli, 'status'], foreman);
   assert.equal(status.status, 4, status.stderr + status.stdout);
   assert.match(status.stdout, /worker stopped/);
+  assert.match(status.stdout, /^Update: /m);
 });
 
 test('no status yet', () => {

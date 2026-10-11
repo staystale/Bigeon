@@ -8,10 +8,12 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, processStartTimes, stopRunningCheck, ANSI_PATTERN } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, processStartTimes, stopRunningCheck, ANSI_PATTERN, bigeonUpdate, versionLine, updateStatusLine } from './lib.ts';
+import type { BigeonUpdate } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
+const UPDATE_CHECK_MS = 60 * 60000;
 
 // Turn the worker status text into one line plus an exit code for `bigeon status`.
 export function describeStatus(
@@ -296,13 +298,9 @@ async function sendResult(
   fs.rmSync(markerPath, { force: true });
 }
 
-// Status text for the foreman. Version is the short commit of the Bigeon folder itself.
-function bigeonVersion(bigeonPath: string): string {
-  const result = git(['-C', path.dirname(bigeonPath), 'rev-parse', '--short', 'HEAD'], process.cwd());
-  return result.ok && result.out.trim() ? result.out.trim() : 'unknown';
-}
-
 type StatusReporter = {
+  setUpdate: (update: BigeonUpdate) => void;
+  version: string;
   publish: (state: string) => void;
   heartbeat: () => void;
   startBeat: () => NodeJS.Timeout | undefined;
@@ -310,7 +308,7 @@ type StatusReporter = {
 
 // Writes the worker status when the state changes and again every heartbeatMinutes. Writes nothing when heartbeatMinutes is 0.
 function makeStatusReporter(projectDir: string, config: Config, bigeonPath: string): StatusReporter {
-  const version = bigeonVersion(bigeonPath);
+  let update = bigeonUpdate(path.dirname(path.dirname(bigeonPath)));
   const intervalMs = config.heartbeatMinutes * 60000;
   let state = '';
   let since = '';
@@ -322,10 +320,17 @@ function makeStatusReporter(projectDir: string, config: Config, bigeonPath: stri
       `State: ${state}`,
       `Since: ${since}`,
       `Last seen: ${now.toISOString()}`,
-      `Version: ${version}`,
+      `Version: ${update.version}`,
+      updateStatusLine(update),
     ].join('\n'));
   };
   return {
+    setUpdate: (next: BigeonUpdate): void => {
+      update = next;
+    },
+    get version(): string {
+      return update.version;
+    },
     publish: (next: string): void => {
       if (intervalMs <= 0) return;
       state = next;
@@ -358,6 +363,12 @@ async function runLoop(
   }
   let announcedWaiting = false;
   let lastMessage = '';
+  const bigeonDir = path.dirname(path.dirname(bigeonPath));
+  let lastUpdate = bigeonUpdate(bigeonDir);
+  let lastUpdateLine = versionLine(lastUpdate, bigeonDir);
+  let lastUpdateCheck = Date.now();
+  status.setUpdate(lastUpdate);
+  log(lastUpdateLine);
   status.publish('idle');
   for (;;) {
     let note: Note | null = null;
@@ -380,6 +391,16 @@ async function runLoop(
     }
     if (!note) {
       if (options.once) return 2;
+      if (Date.now() - lastUpdateCheck >= UPDATE_CHECK_MS) {
+        lastUpdateCheck = Date.now();
+        lastUpdate = bigeonUpdate(bigeonDir);
+        status.setUpdate(lastUpdate);
+        const line = versionLine(lastUpdate, bigeonDir);
+        if (line !== lastUpdateLine) {
+          lastUpdateLine = line;
+          log(line);
+        }
+      }
       status.heartbeat();
       if (!announcedWaiting) log(`[bigeon] waiting for a task (checking every ${config.pollSeconds}s)...`);
       announcedWaiting = true;

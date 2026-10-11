@@ -33,6 +33,8 @@ Worker machine (leave this window open):
 - The loop costs nothing while it waits; the agent only starts when a task arrives.
 - Stop it with Ctrl+C: it also stops the agent and marks itself "stopped".
 - "another bigeon worker is already running in this folder": close the other loop window first.
+- The loop prints the Bigeon version when it starts and says "UPDATE AVAILABLE" when there is one. To update: Ctrl+C, `git pull` in `<Bigeon>`, start it again. Bigeon never updates itself.
+- `bigeon status` on the foreman shows the same (the `Update:` line).
 
 Foreman machine, check the worker is alive, then start the foreman:
 
@@ -52,6 +54,7 @@ Tell the foreman AI: `Read <Bigeon>/docs/FOREMAN.md and act as the foreman. Use 
 | `accept 41 --dry-run` | foreman | Show what accepting task 041 would do, without pushing |
 | `accept 41` | foreman | Push `worker/041` to main, only if: result PASS, branch unchanged since the result, based on the current main, and GitHub's check passed (waits up to 15 min). Exit 0 done, 1 refused (says why), 3 remote unreachable, 5 check still running |
 | `check` | either | Run `checkCommand`, print PASS or FAIL and the important lines |
+| `version` | either | Show this machine's Bigeon version and say when an update is available. Exit 0 |
 | `worker` | worker | The loop: wait, run the agent, check, retry up to `maxTries`, report |
 
 Before accepting, look at the change: `git fetch origin` then `git diff origin/main origin/worker/041`.

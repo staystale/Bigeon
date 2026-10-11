@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit,
+  loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit, bigeonUpdate, versionLine, BIGEON_DIR,
 } from '../src/lib.ts';
 import { sendNote, findNewNote, readStatus, RemoteError } from '../src/comms.ts';
 import { runWorker, describeStatus } from '../src/worker.ts';
@@ -22,6 +22,7 @@ Usage (run inside your project):
   bigeon worker [--once]                   worker: loop forever. Wait for a task, run workerCommand
                                            (your agent, e.g. the Cline CLI) with the task on stdin,
                                            run the check, report. Needs workerCommand in the config.
+  bigeon version                           show this Bigeon's version and whether an update is available
   bigeon status                            foreman: show whether the worker is idle, working or down
                                            (exit 0 = alive, 2 = no status yet, 3 = remote unreachable, 4 = stopped or down)
   bigeon watch tasks|results [--once] [--timeout MINUTES]
@@ -86,6 +87,11 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (command === 'version') {
+    console.log(versionLine(bigeonUpdate(BIGEON_DIR), BIGEON_DIR));
+    return 0;
+  }
+
   const config = loadConfig(projectDir);
 
   if (['send', 'report', 'watch', 'worker', 'status', 'accept'].includes(command)) requireGit();
@@ -147,6 +153,8 @@ async function main(): Promise<number> {
     console.log(described.line);
     const version = /^Version: .+$/m.exec(text);
     if (version) console.log(version[0]);
+    const update = /^Update: .+$/m.exec(text);
+    if (update) console.log(update[0]);
     return described.exitCode;
   }
 
