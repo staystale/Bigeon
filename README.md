@@ -96,6 +96,9 @@ Type-checks the source (`tsc`, check only, nothing is built) and runs a full for
 a local bare git remote. TypeScript is a dev dependency only: Node runs the `.ts` files as they are.
 
 Our own setup and habits are in [docs/HOW-WE-WORK.md](docs/HOW-WE-WORK.md).
+New to Bigeon? Start with [docs/USER-GUIDE.md](docs/USER-GUIDE.md): the commands to copy and paste, explained.
+
+
 
 ## Limits
 
