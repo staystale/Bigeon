@@ -32,10 +32,12 @@ Worker machine (leave this window open):
 - `git pull` updates Bigeon. Do it, then restart the loop, whenever Bigeon changes.
 - The loop costs nothing while it waits; the agent only starts when a task arrives.
 - Stop it with Ctrl+C: it also stops the agent and marks itself "stopped".
+- Windows: if the window title starts with "Select", the loop is paused (clicking in a console window selects text and freezes the program). Press Esc in that window to let it continue.
 - "another bigeon worker is already running in this folder": close the other loop window first.
 - If the Cline desktop app is open on the worker, quit it (and its background service code-sidecar.exe) while the loop runs: the cline command then hands its work to that service, outside Bigeon's guard, so processes the agent starts can outlive it.
 - The loop prints the Bigeon version when it starts and says "UPDATE AVAILABLE" when there is one. To update: Ctrl+C, `git pull` in `<Bigeon>`, start it again. Bigeon never updates itself.
 - `bigeon status` on the foreman shows the same (the `Update:` line).
+
 **Optional: a start script.** Save the worker commands as a file you can double-click, or ask your AI assistant to make one for your folders. Windows, `Start Bigeon worker.cmd`:
 
     @echo off
@@ -49,8 +51,6 @@ Linux/macOS, `start-bigeon-worker.sh` (then `chmod +x start-bigeon-worker.sh`):
     cd <project> && node <Bigeon>/bin/bigeon.ts worker
 
 It does not update Bigeon: when the loop says "UPDATE AVAILABLE", stop it, `git pull` in `<Bigeon>`, start it again.
-
-
 
 Foreman machine, check the worker is alive, then start the foreman:
 
