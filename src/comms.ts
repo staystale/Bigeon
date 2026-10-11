@@ -6,17 +6,59 @@ import path from 'node:path';
 import { git, mustGit, STATE_DIR } from './lib.ts';
 import type { Config, Note, NoteKind } from './types.ts';
 
-export function commsDir(projectDir: string): string {
-  return path.join(projectDir, STATE_DIR, 'comms');
+export function commsDir(projectDir: string, config: Config): string {
+  return path.join(projectDir, STATE_DIR, config.commsRepo ? 'comms-repo' : 'comms');
+}
+
+// The remote name used inside the comms folder: a clone's own remote is always origin.
+function commsRemote(config: Config): string {
+  return config.commsRepo ? 'origin' : config.remote;
 }
 
 function hasRemote(workingDir: string, config: Config): boolean {
-  return git(['remote', 'get-url', config.remote], workingDir).ok;
+  return git(['remote', 'get-url', commsRemote(config)], workingDir).ok;
+}
+
+// Create the orphan comms branch in dir, with empty tasks/ and results/, and push it when there is a remote.
+function createOrphanBranch(dir: string, commsBranch: string, remote: string | null): void {
+  mustGit(['checkout', '--orphan', commsBranch], dir);
+  git(['rm', '-rf', '--quiet', '.'], dir);
+  for (const folder of ['tasks', 'results']) {
+    fs.mkdirSync(path.join(dir, folder), { recursive: true });
+    fs.writeFileSync(path.join(dir, folder, '.gitkeep'), '');
+  }
+  mustGit(['add', '.'], dir);
+  mustGit(['commit', '--quiet', '-m', 'bigeon: start comms branch'], dir);
+  if (remote) mustGit(['push', '--quiet', '-u', remote, commsBranch], dir);
+}
+
+function ensureCommsClone(projectDir: string, config: Config, dir: string): void {
+  const { commsRepo, commsBranch } = config;
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const cloned = git(['clone', '--quiet', commsRepo, dir], projectDir);
+  if (!cloned.ok) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new RemoteError(`cannot clone commsRepo ${commsRepo}: ${cloned.err || cloned.out}`);
+  }
+  for (const key of ['user.name', 'user.email']) {
+    const value = git(['config', '--get', key], projectDir);
+    if (value.ok && value.out.trim()) mustGit(['config', key, value.out.trim()], dir);
+  }
+  git(['fetch', 'origin'], dir);
+  if (git(['rev-parse', '--verify', '--quiet', `origin/${commsBranch}`], dir).ok) {
+    mustGit(['checkout', '-B', commsBranch, `origin/${commsBranch}`], dir);
+  } else {
+    createOrphanBranch(dir, commsBranch, 'origin');
+  }
 }
 
 export function ensureComms(projectDir: string, config: Config): string {
-  const dir = commsDir(projectDir);
+  const dir = commsDir(projectDir, config);
   if (fs.existsSync(path.join(dir, '.git'))) return dir;
+  if (config.commsRepo) {
+    ensureCommsClone(projectDir, config, dir);
+    return dir;
+  }
 
   const { remote, commsBranch } = config;
   const remoteExists = hasRemote(projectDir, config);
@@ -32,15 +74,7 @@ export function ensureComms(projectDir: string, config: Config): string {
     mustGit(['worktree', 'add', dir, commsBranch], projectDir);
   } else {
     mustGit(['worktree', 'add', '--detach', dir], projectDir);
-    mustGit(['checkout', '--orphan', commsBranch], dir);
-    git(['rm', '-rf', '--quiet', '.'], dir);
-    for (const folder of ['tasks', 'results']) {
-      fs.mkdirSync(path.join(dir, folder), { recursive: true });
-      fs.writeFileSync(path.join(dir, folder, '.gitkeep'), '');
-    }
-    mustGit(['add', '.'], dir);
-    mustGit(['commit', '--quiet', '-m', 'bigeon: start comms branch'], dir);
-    if (remoteExists) mustGit(['push', '--quiet', '-u', remote, commsBranch], dir);
+    createOrphanBranch(dir, commsBranch, remoteExists ? remote : null);
   }
   return dir;
 }
@@ -49,8 +83,8 @@ export class RemoteError extends Error {}
 
 function pullComms(dir: string, config: Config): void {
   if (!hasRemote(dir, config)) return;
-  const result = git(['pull', '--quiet', '--rebase', '--autostash', config.remote, config.commsBranch], dir);
-  if (!result.ok) throw new RemoteError(`cannot reach ${config.remote}: ${result.err || result.out}`);
+  const result = git(['pull', '--quiet', '--rebase', '--autostash', commsRemote(config), config.commsBranch], dir);
+  if (!result.ok) throw new RemoteError(`cannot reach ${commsRemote(config)}: ${result.err || result.out}`);
 }
 
 function folderFor(kind: NoteKind): string {
@@ -80,7 +114,7 @@ function commitAndPush(dir: string, config: Config, relativePath: string, messag
 
   if (!hasRemote(dir, config)) return;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    if (git(['push', '--quiet', config.remote, config.commsBranch], dir).ok) return;
+    if (git(['push', '--quiet', commsRemote(config), config.commsBranch], dir).ok) return;
     pullComms(dir, config);
   }
   throw new Error('Could not push the note after 3 attempts');

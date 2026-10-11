@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: Config = {
   maxTries: 3,
   pollSeconds: 30,
   commsBranch: 'agent-comms',
+  commsRepo: '',
   remote: 'origin',
   checkTimeoutSeconds: 300,
   workerCommand: '',
@@ -53,6 +54,7 @@ const CONFIG_RULES: [keyof Config, string, (value: unknown) => boolean][] = [
   ['workerCommand', 'text', (v) => typeof v === 'string'],
   ['remote', 'text', (v) => typeof v === 'string'],
   ['commsBranch', 'text', (v) => typeof v === 'string'],
+  ['commsRepo', 'text', (v) => typeof v === 'string'],
 ];
 
 export function git(args: string[], workingDir?: string): GitResult {

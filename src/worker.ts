@@ -408,7 +408,7 @@ async function runLoop(
     log(`[bigeon] task ${note.id} received:\n${note.text.trim()}`);
 
     // A result already pushed means an earlier run crashed before marking the task seen.
-    const resultPath = path.join(commsDir(projectDir), 'results', `${note.id}.md`);
+    const resultPath = path.join(commsDir(projectDir, config), 'results', `${note.id}.md`);
     const existing = fs.existsSync(resultPath) ? /^Status: (PASS|FAIL)$/m.exec(fs.readFileSync(resultPath, 'utf8')) : null;
     if (existing) {
       markNoteSeen(projectDir, 'task', note);

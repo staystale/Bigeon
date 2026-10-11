@@ -49,6 +49,14 @@ Open that file and set:
 
 Test it: `node <Bigeon>/bin/bigeon.ts check` must print PASS or FAIL.
 
+## Keep the conversation private (optional)
+
+1. On GitHub create a new, empty, private repo (no README).
+2. Both machines: check `git ls-remote <its URL>` works.
+3. Both machines: set `"commsRepo": "<its URL>"` in `bigeon.config.json`, then restart the worker loop.
+
+Then tasks, results and status go only to that repo; the project repo only gets code.
+
 ## 2. Start the worker
 
 *Worker machine, a new terminal (this becomes the worker window):*
@@ -178,4 +186,5 @@ From then on, tell it what you want done. It writes the tasks, waits for results
 - `checkTimeoutSeconds` (300): stop a stuck check after this.
 - `workerTimeoutSeconds` (900): stop a stuck agent after this.
 - `remote`, `commsBranch` (origin, agent-comms): where the notes travel.
+- `commsRepo` (empty): a separate repo for the notes, e.g. a private one. Empty = the project's own repo.
 

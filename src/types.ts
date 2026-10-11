@@ -14,6 +14,8 @@ export interface Config {
   pollSeconds: number;
   /** Branch that carries the notes. */
   commsBranch: string;
+  /** Optional separate repo (git URL) for the notes. Empty = the project's own repo. */
+  commsRepo: string;
   /** Git remote both machines push to and pull from. */
   remote: string;
   /** Seconds before the check is stopped and counted as a FAIL. */

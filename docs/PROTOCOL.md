@@ -58,4 +58,4 @@ Stashed: present when leftovers from an interrupted run were stashed (worker loo
 ## Safety
 
 - Never put keys, tokens or URLs with secrets in notes.
-- The comms branch is pushed to the same remote as the code.
+- The comms branch is pushed to the same remote as the code. Or the notes live on the same branch of a separate repo when `commsRepo` is set.
