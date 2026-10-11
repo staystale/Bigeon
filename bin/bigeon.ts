@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Bigeon command line. Run from inside the project you want to work on.
 import fs from 'node:fs';
+import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import {
   loadConfig, runCheck, formatCheck, sleep, resultNoteText, initProject, requireGit, bigeonUpdate, versionLine, BIGEON_DIR,
 } from '../src/lib.ts';
-import { sendNote, findNewNote, readStatus, RemoteError } from '../src/comms.ts';
+import { sendNote, findNewNote, readStatus, RemoteError, wipeComms, wipeTarget } from '../src/comms.ts';
 import { runWorker, describeStatus } from '../src/worker.ts';
 import { accept } from '../src/accept.ts';
 import type { ParsedArguments, NoteKind, Note } from '../src/types.ts';
@@ -28,6 +29,8 @@ Usage (run inside your project):
   bigeon watch tasks|results [--once] [--timeout MINUTES]
                                            wait for a new note, print it, exit 0
                                            (exit 2 = nothing new, so the model is not woken, exit 3 = could not reach the remote)
+  bigeon wipe [--yes]                       delete all tasks, results and status (the comms branch) here and on the remote,
+                                            to start fresh. Run it on every machine. Asks first unless --yes.
   bigeon accept NNN [--dry-run] [--timeout MINUTES]
                                             foreman: check the result, base and CI of worker/NNN, then push it to main
                                             (exit 0 = accepted, 1 = refused, 3 = could not reach the remote,
@@ -192,6 +195,25 @@ async function main(): Promise<number> {
       if (flags.once || (deadline && Date.now() >= deadline)) return 2;
       sleep(config.pollSeconds * 1000);
     }
+  }
+
+  if (command === 'wipe') {
+    if (!flags.yes) {
+      if (!process.stdin.isTTY) {
+        console.error('bigeon: add --yes to wipe without asking');
+        return 1;
+      }
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question(
+        `This deletes all tasks, results and status on ${wipeTarget(config)} ${config.commsBranch}.\nType wipe to confirm: `,
+      );
+      rl.close();
+      if (answer !== 'wipe') {
+        console.log('Nothing was deleted.');
+        return 1;
+      }
+    }
+    return wipeComms(projectDir, config, (line) => console.log(line));
   }
 
   console.error(`Unknown command: ${command}\n\n${HELP}`);

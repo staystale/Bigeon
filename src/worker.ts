@@ -8,7 +8,7 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, processStartTimes, stopRunningCheck, ANSI_PATTERN, bigeonUpdate, versionLine, updateStatusLine } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, processStartTimes, stopRunningCheck, isRunning, readLockPid, ANSI_PATTERN, bigeonUpdate, versionLine, updateStatusLine } from './lib.ts';
 import type { BigeonUpdate } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
@@ -105,15 +105,6 @@ function bootTime(): number {
 
 function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentStarts: Record<string, string> = {}): void {
   fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, attempts, bootTime: bootTime(), agentStarts }));
-}
-
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 let runningAgent: ChildProcess | null = null;
@@ -515,13 +506,7 @@ export async function runWorker(
   const lockPath = path.join(projectDir, '.bigeon', 'worker.lock');
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   if (fs.existsSync(lockPath)) {
-    let otherPid = 0;
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-      if (typeof parsed === 'object' && parsed !== null && 'pid' in parsed && typeof parsed.pid === 'number') otherPid = parsed.pid;
-    } catch {
-      // unreadable lock: treat as stale
-    }
+    const otherPid = readLockPid(lockPath);
     if (otherPid > 0 && isRunning(otherPid)) {
       throw new Error(`another bigeon worker is already running in this folder (pid ${otherPid})`);
     }

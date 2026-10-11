@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { git, mustGit, STATE_DIR } from './lib.ts';
+import { git, mustGit, STATE_DIR, isRunning, readLockPid } from './lib.ts';
 import type { Config, Note, NoteKind } from './types.ts';
 
 export function commsDir(projectDir: string, config: Config): string {
@@ -230,4 +230,48 @@ function appendSeen(projectDir: string, kind: NoteKind, key: string): void {
 // Mark a note as seen once it has been fully handled.
 export function markNoteSeen(projectDir: string, kind: NoteKind, note: Note): void {
   appendSeen(projectDir, kind, noteKey(`${note.id}.md`, note.text));
+}
+// Where the notes live, for messages: the remote name, or the commsRepo URL.
+export function wipeTarget(config: Config): string {
+  return config.commsRepo || config.remote;
+}
+
+// Delete the conversation: the remote comms branch, then every local copy. Returns the exit code.
+export function wipeComms(projectDir: string, config: Config, log: (line: string) => void): number {
+  const { commsBranch, commsRepo, remote } = config;
+  const lockPid = readLockPid(path.join(projectDir, STATE_DIR, 'worker.lock'));
+  if (lockPid > 0 && isRunning(lockPid)) {
+    log('stop the worker loop in this folder first');
+    return 1;
+  }
+
+  const target = wipeTarget(config);
+  const deleted = git(['push', target, '--delete', commsBranch], projectDir);
+  if (deleted.ok) {
+    log(`deleted ${commsBranch} on ${target}`);
+  } else if (/remote ref does not exist/.test(`${deleted.err}${deleted.out}`)) {
+    log(`${commsBranch} was not on ${target}`);
+  } else {
+    log(`could not delete ${commsBranch} on ${target}: ${(deleted.err || deleted.out).trim()}`);
+    return 1;
+  }
+
+  const stateDir = path.join(projectDir, STATE_DIR);
+  if (commsRepo) {
+    fs.rmSync(path.join(stateDir, 'comms-repo'), { recursive: true, force: true });
+    log('removed .bigeon/comms-repo');
+  } else {
+    git(['worktree', 'remove', '--force', path.join(STATE_DIR, 'comms')], projectDir);
+    fs.rmSync(path.join(stateDir, 'comms'), { recursive: true, force: true });
+    git(['worktree', 'prune'], projectDir);
+    git(['branch', '-D', commsBranch], projectDir);
+    git(['branch', '-D', '-r', `${remote}/${commsBranch}`], projectDir);
+    log(`removed local ${commsBranch} branch and .bigeon/comms`);
+  }
+  for (const name of ['seen-tasks.json', 'seen-results.json', 'in-progress.json']) {
+    fs.rmSync(path.join(stateDir, name), { force: true });
+  }
+  log('removed the seen-notes and in-progress files');
+  log('Run bigeon wipe on every other machine too, before starting bigeon there again: a machine that still has the old notes would push them back.');
+  return 0;
 }

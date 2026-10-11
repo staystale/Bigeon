@@ -57,6 +57,26 @@ const CONFIG_RULES: [keyof Config, string, (value: unknown) => boolean][] = [
   ['commsRepo', 'text', (v) => typeof v === 'string'],
 ];
 
+export function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+// The pid stored in a worker.lock file, or 0 when the file is missing or unreadable.
+export function readLockPid(lockPath: string): number {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && 'pid' in parsed && typeof parsed.pid === 'number') return parsed.pid;
+  } catch {
+    // unreadable lock: treat as stale
+  }
+  return 0;
+}
+
 export function git(args: string[], workingDir?: string): GitResult {
   const result = spawnSync('git', args, { cwd: workingDir, encoding: 'utf8' });
   return {

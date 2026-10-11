@@ -57,6 +57,15 @@ Test it: `node <Bigeon>/bin/bigeon.ts check` must print PASS or FAIL.
 
 Then tasks, results and status go only to that repo; the project repo only gets code.
 
+## Start the conversation fresh (wipe)
+
+1. Stop the worker loop (Ctrl+C in the worker window).
+2. Worker machine and foreman machine, terminal in `<project>`: `node <Bigeon>/bin/bigeon.ts wipe`
+   (type `wipe` to confirm, or add `--yes`). Do it on both machines: a machine that still has the old notes would push them back.
+3. Start the worker loop again.
+
+Old copies GitHub already served may stay cached for a while; the deleted commits are not visible on the repo any more.
+
 ## 2. Start the worker
 
 *Worker machine, a new terminal (this becomes the worker window):*
@@ -132,6 +141,7 @@ From then on, tell it what you want done. It writes the tasks, waits for results
 
 - `node <Bigeon>/bin/bigeon.ts version`: this machine's Bigeon version, and whether an update is available.
 - `node <Bigeon>/bin/bigeon.ts check`: run `checkCommand`, print PASS or FAIL and the important lines.
+- `node <Bigeon>/bin/bigeon.ts wipe`: delete all tasks, results and status (asks first; `--yes` skips the question). See "Start the conversation fresh (wipe)".
 
 ## 6. Reading a result
 
