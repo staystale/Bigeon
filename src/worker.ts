@@ -176,7 +176,7 @@ function runAgent(
     let exited = false;
     let snapshotTimer: NodeJS.Timeout | undefined;
     let knownPids: number[] = [];
-    let knownStartCount = 0;
+    let knownStarts: Record<string, string> = {};
     const rootPid = child.pid;
     if (process.platform === 'win32' && rootPid !== undefined) {
       const snapshot = (): void => {
@@ -201,16 +201,12 @@ function runAgent(
               }
             }
             const pids = descendants(rootPid, pairs, knownPids);
-            const starts: Record<string, string> = {};
-            for (const pid of [rootPid, ...pids]) {
-              const start = startOf.get(pid);
-              if (start !== undefined) starts[String(pid)] = start;
-            }
-            const startCount = Object.keys(starts).length;
-            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index]) && startCount === knownStartCount) return;
+            const before = Object.keys(knownStarts).length;
+            knownStarts = mergeStarts(knownStarts, startOf, [rootPid, ...pids]);
+            const grew = Object.keys(knownStarts).length > before;
+            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index]) && !grew) return;
             knownPids = pids;
-            knownStartCount = startCount;
-            onTree(pids, starts);
+            onTree(pids, knownStarts);
           },
         );
       };
@@ -601,4 +597,14 @@ export async function runWorker(
     process.off('SIGTERM', onSignal);
     removeLock();
   }
+}
+
+/** Adds start times for pids not yet recorded; never removes or overwrites an entry. */
+export function mergeStarts(known: Record<string, string>, seen: Map<number, string>, pids: number[]): Record<string, string> {
+  const merged = { ...known };
+  for (const pid of pids) {
+    const start = seen.get(pid);
+    if (start !== undefined && merged[String(pid)] === undefined) merged[String(pid)] = start;
+  }
+  return merged;
 }

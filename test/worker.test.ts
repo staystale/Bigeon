@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { cli, run, makeClone, setupRemote, setupPair, killTree, waitGone } from './helpers.ts';
-import { workerPrompt, descendants, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
+import { workerPrompt, descendants, repairMojibake, agentTail, mergeStarts, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
@@ -272,4 +272,11 @@ test('Ctrl+C during a check stops the check processes', { skip: process.platform
     if (child.exitCode === null) child.kill('SIGKILL');
     if (gcPid > 0) killTree(gcPid);
   }
+});
+
+test('mergeStarts keeps entries for exited pids, never overwrites, and adds new pids', () => {
+  const known = { '10': '100', '11': '110' };
+  const merged = mergeStarts(known, new Map([[11, '999'], [12, '120']]), [10, 11, 12, 13]);
+  assert.deepEqual(merged, { '10': '100', '11': '110', '12': '120' });
+  assert.deepEqual(known, { '10': '100', '11': '110' });
 });
