@@ -137,6 +137,12 @@ export function killTree(child: ChildProcess): void {
 
 const CHECK_OUTPUT_CAP = 64 * 1024 * 1024;
 
+let runningCheck: ChildProcess | null = null;
+
+export function stopRunningCheck(): void {
+  if (runningCheck) killTree(runningCheck);
+}
+
 // Run the project's check command. Returns a short, token-cheap summary.
 export async function runCheck(projectDir: string, config: Config): Promise<CheckResult> {
   if (!config.checkCommand) {
@@ -150,6 +156,7 @@ export async function runCheck(projectDir: string, config: Config): Promise<Chec
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    runningCheck = child;
     let out = '';
     let err = '';
     let timedOut = false;
@@ -174,6 +181,7 @@ export async function runCheck(projectDir: string, config: Config): Promise<Chec
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (runningCheck === child) runningCheck = null;
       resolve({ code, text: `${out}\n${err}`, timedOut });
     });
   });

@@ -235,3 +235,41 @@ test('Ctrl+C stops an idle worker at once', { skip: process.platform === 'win32'
     if (child.exitCode === null) child.kill('SIGKILL');
   }
 });
+
+test('Ctrl+C during a check stops the check processes', { skip: process.platform === 'win32' }, async () => {
+  const { foreman, worker } = setupPair('bigeon-ctrlc-check-', {
+    checkCommand: 'node check.js',
+    workerCommand: 'node -e 0',
+    pollSeconds: 1,
+  });
+  fs.writeFileSync(path.join(worker, 'check.js'), [
+    "const { spawn } = require('child_process');",
+    "const g = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });",
+    "require('fs').writeFileSync('gc.pid', String(g.pid));",
+    'setInterval(()=>{},1000);',
+  ].join('\n'));
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+  const child = spawn('node', [cli, 'worker'], { cwd: worker, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', () => {});
+  child.stderr.on('data', () => {});
+  const pidPath = path.join(worker, 'gc.pid');
+  let gcPid = 0;
+  try {
+    const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+    const deadline = Date.now() + 20000;
+    while (!fs.existsSync(pidPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(fs.existsSync(pidPath), 'grandchild pid was written');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    gcPid = Number(fs.readFileSync(pidPath, 'utf8'));
+    assert.ok(gcPid > 0);
+    child.kill('SIGINT');
+    const code = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 5000))]);
+    assert.equal(code, 130);
+    assert.equal(await waitGone(gcPid, 5000), true);
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    if (gcPid > 0) killTree(gcPid);
+  }
+});

@@ -7,7 +7,7 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, ANSI_PATTERN } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, stopRunningCheck, ANSI_PATTERN } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
@@ -556,6 +556,7 @@ export async function runWorker(
   const status = makeStatusReporter(projectDir, config, bigeonPath);
   const onSignal = (): void => {
     if (runningAgent) killTree(runningAgent);
+    stopRunningCheck();
     status.publish('stopped');
     removeLock();
     process.exit(130);
