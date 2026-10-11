@@ -7,7 +7,7 @@ import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, stopRunningCheck, ANSI_PATTERN } from './lib.ts';
+import { runCheck, formatCheck, resultNoteText, git, mainRef, killPid, killTree, processStartTimes, stopRunningCheck, ANSI_PATTERN } from './lib.ts';
 import { findNewNote, markNoteSeen, sendNote, commsDir, RemoteError, writeStatus } from './comms.ts';
 
 const AGENT_TAIL_LINES = 15;
@@ -72,7 +72,7 @@ export function workerPrompt(
 }
 
 // The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
-type Marker = { id: string; agentPid: number | null; agentPids: number[]; attempts: number; bootTime: number };
+type Marker = { id: string; agentPid: number | null; agentPids: number[]; attempts: number; bootTime: number; agentStarts: Record<string, string> };
 
 function readMarker(markerPath: string): Marker {
   try {
@@ -85,12 +85,18 @@ function readMarker(markerPath: string): Marker {
         'agentPids' in parsed && Array.isArray(parsed.agentPids)
           ? parsed.agentPids.filter((value): value is number => typeof value === 'number')
           : [];
-      return { id: parsed.id, agentPid, agentPids, attempts, bootTime: markerBoot };
+      const agentStarts: Record<string, string> = {};
+      if ('agentStarts' in parsed && typeof parsed.agentStarts === 'object' && parsed.agentStarts !== null) {
+        for (const [key, value] of Object.entries(parsed.agentStarts)) {
+          if (typeof value === 'string') agentStarts[key] = value;
+        }
+      }
+      return { id: parsed.id, agentPid, agentPids, attempts, bootTime: markerBoot, agentStarts };
     }
   } catch {
     // missing or unreadable marker: treat as no interruption
   }
-  return { id: '', agentPid: null, agentPids: [], attempts: 0, bootTime: 0 };
+  return { id: '', agentPid: null, agentPids: [], attempts: 0, bootTime: 0, agentStarts: {} };
 }
 
 // When this machine started; differs by a lot after a restart.
@@ -98,8 +104,8 @@ function bootTime(): number {
   return Date.now() - os.uptime() * 1000;
 }
 
-function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentPids: number[] = []): void {
-  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, agentPids, attempts, bootTime: bootTime() }));
+function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentPids: number[] = [], agentStarts: Record<string, string> = {}): void {
+  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, agentPids, attempts, bootTime: bootTime(), agentStarts }));
 }
 
 function isRunning(pid: number): boolean {
@@ -141,7 +147,7 @@ function runAgent(
   config: Config,
   prompt: string,
   onSpawn: (pid: number) => void,
-  onTree: (pids: number[]) => void,
+  onTree: (pids: number[], starts: Record<string, string>) => void,
 ): Promise<AgentRun> {
   return new Promise<AgentRun>((resolve) => {
     const child = spawn(config.workerCommand, {
@@ -170,6 +176,7 @@ function runAgent(
     let exited = false;
     let snapshotTimer: NodeJS.Timeout | undefined;
     let knownPids: number[] = [];
+    let knownStartCount = 0;
     const rootPid = child.pid;
     if (process.platform === 'win32' && rootPid !== undefined) {
       const snapshot = (): void => {
@@ -179,20 +186,31 @@ function runAgent(
             '-NoProfile',
             '-NonInteractive',
             '-Command',
-            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }',
+            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToFileTimeUtc())" }',
           ],
           { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
           (error, stdout) => {
             if (exited || error) return;
             const pairs: Array<[number, number]> = [];
+            const startOf = new Map<number, string>();
             for (const line of stdout.split(/\r?\n/)) {
-              const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
-              if (match) pairs.push([Number(match[1]), Number(match[2])]);
+              const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line);
+              if (match) {
+                pairs.push([Number(match[1]), Number(match[2])]);
+                startOf.set(Number(match[1]), match[3] as string);
+              }
             }
             const pids = descendants(rootPid, pairs, knownPids);
-            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index])) return;
+            const starts: Record<string, string> = {};
+            for (const pid of [rootPid, ...pids]) {
+              const start = startOf.get(pid);
+              if (start !== undefined) starts[String(pid)] = start;
+            }
+            const startCount = Object.keys(starts).length;
+            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index]) && startCount === knownStartCount) return;
             knownPids = pids;
-            onTree(pids);
+            knownStartCount = startCount;
+            onTree(pids, starts);
           },
         );
       };
@@ -455,8 +473,14 @@ async function runLoop(
         log(`[bigeon] machine restarted since the interrupted run, not stopping old pid ${leftoverPid}`);
       } else {
         const stopped: number[] = [];
+        const current = processStartTimes([leftoverPid, ...marker.agentPids]);
         for (const pid of [leftoverPid, ...marker.agentPids]) {
           if (!isRunning(pid)) continue;
+          const recorded = marker.agentStarts[String(pid)];
+          if (recorded !== undefined && current.get(pid) !== recorded) {
+            log(`[bigeon] not stopping pid ${pid}: it is a different process now`);
+            continue;
+          }
           try {
             killPid(pid);
           } catch {
@@ -496,15 +520,21 @@ async function runLoop(
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
       const taskId = note.id;
       let agentPid: number | null = null;
+      let agentStarts: Record<string, string> = {};
       status.publish(`working on ${taskId} (try ${tries} of ${config.maxTries})`);
       const beat = status.startBeat();
       let run: AgentRun;
       try {
         run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
           agentPid = pid;
-          writeMarker(markerPath, taskId, pid, attempts);
-        }, (pids) => {
-          writeMarker(markerPath, taskId, agentPid, attempts, pids);
+          if (process.platform !== 'win32') {
+            const start = processStartTimes([pid]).get(pid);
+            if (start !== undefined) agentStarts = { [String(pid)]: start };
+          }
+          writeMarker(markerPath, taskId, pid, attempts, [], agentStarts);
+        }, (pids, starts) => {
+          agentStarts = starts;
+          writeMarker(markerPath, taskId, agentPid, attempts, pids, agentStarts);
         });
       } finally {
         clearInterval(beat);

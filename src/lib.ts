@@ -113,6 +113,59 @@ export function pickErrorLines(allLines: string[], count: number): { shown: stri
   return { shown, hidden: allLines.length - shown.length };
 }
 
+// Field 22 (starttime) of a /proc/<pid>/stat line. The command name (field 2) sits in parentheses and may
+// contain spaces and ')', so only the text after the last ')' is split: starttime is its 20th value.
+export function parseProcStat(text: string): string | null {
+  const close = text.lastIndexOf(')');
+  if (close < 0) return null;
+  const fields = text.slice(close + 1).trim().split(/\s+/);
+  const value = fields[19];
+  return fields.length >= 20 && value !== undefined && /^\d+$/.test(value) ? value : null;
+}
+
+// Start time of each running pid as an opaque string (missing pids are absent). Never throws.
+export function processStartTimes(pids: number[]): Map<number, string> {
+  const result = new Map<number, string>();
+  if (pids.length === 0) return result;
+  try {
+    if (process.platform === 'win32') {
+      const out = spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CreationDate.ToFileTimeUtc())\" }',
+        ],
+        { encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      const wanted = new Set(pids);
+      for (const line of String(out.stdout ?? '').split(/\r?\n/)) {
+        const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+        if (match && wanted.has(Number(match[1]))) result.set(Number(match[1]), match[2] as string);
+      }
+    } else if (process.platform === 'linux') {
+      for (const pid of pids) {
+        try {
+          const start = parseProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+          if (start !== null) result.set(pid, start);
+        } catch {
+          // absent
+        }
+      }
+    } else if (process.platform === 'darwin') {
+      for (const pid of pids) {
+        const out = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' });
+        const start = String(out.stdout ?? '').trim();
+        if (start) result.set(pid, start);
+      }
+    }
+  } catch {
+    // any error: pids stay absent
+  }
+  return result;
+}
+
 // Stop a process and everything it started (the shell wrapper alone is not enough).
 export function killPid(pid: number): void {
   if (process.platform === 'win32') {

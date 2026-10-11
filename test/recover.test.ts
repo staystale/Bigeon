@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { cli, run, setupPair as sharedSetupPair, setConfig, killTree, waitGone } from './helpers.ts';
@@ -201,6 +202,35 @@ test('a leftover agent from a crash is stopped on restart', async () => {
         // already gone
       }
     }
+  }
+});
+
+test('a reused pid is not stopped', async () => {
+  const { foreman, worker } = setupPair('bigeon-reused-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  try {
+    const pid = child.pid as number;
+    fs.mkdirSync(path.join(worker, '.bigeon'), { recursive: true });
+    fs.writeFileSync(
+      path.join(worker, '.bigeon', 'in-progress.json'),
+      JSON.stringify({
+        id: '001',
+        agentPid: pid,
+        agentPids: [],
+        attempts: 1,
+        bootTime: Date.now() - os.uptime() * 1000,
+        agentStarts: { [String(pid)]: '1' },
+      }),
+    );
+    const out = run('node', [cli, 'worker', '--once'], worker);
+    assert.equal(out.status, 0, out.stderr + out.stdout);
+    assert.match(out.stdout, /different process now/);
+    assert.equal(await waitGone(pid, 1000), false, 'the unrelated process was stopped');
+  } finally {
+    child.kill('SIGKILL');
   }
 });
 

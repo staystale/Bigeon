@@ -1,7 +1,7 @@
 // pickErrorLines: FAIL results show the failure, not the first lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickErrorLines, loadConfig } from '../src/lib.ts';
+import { pickErrorLines, loadConfig, parseProcStat } from '../src/lib.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,4 +48,13 @@ test('pickErrorLines: fewer lines than count shows all', () => {
   const { shown, hidden } = pickErrorLines(lines, 10);
   assert.deepEqual(shown, lines);
   assert.equal(hidden, 0);
+});
+
+test('parseProcStat returns the start time even when the command name has spaces and parentheses', () => {
+  const rest = Array.from({ length: 30 }, (_, index) => String(index + 3));
+  const line = '1234 (my (odd) name) S ' + rest.join(' ');
+  // after the last ')': S is value 1, so starttime (20th value) is rest[18]
+  assert.equal(parseProcStat(line), rest[18]);
+  assert.equal(parseProcStat('garbage'), null);
+  assert.equal(parseProcStat('1 (x) S 1 2'), null);
 });
