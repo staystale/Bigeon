@@ -1,44 +1,69 @@
 # Bigeon user guide
 
-Bigeon lets a strong AI (the **foreman**, e.g. Claude) hand coding tasks to a cheaper AI (the **worker**, e.g. Cline)
-through git. Only short notes travel: the task, then PASS or FAIL with a few lines. Notes live on the `agent-comms`
-branch of your project's repo. Never put passwords, keys or tokens in notes: they are as public as the repo.
+## What it is
 
-In the commands below, `<Bigeon>` is the folder where Bigeon is cloned and `<project>` is the clone of your project.
-If you ran `npm link` in the Bigeon folder you can type `bigeon` instead of `node <Bigeon>/bin/bigeon.ts`.
+Bigeon lets a strong AI on one machine (the **foreman**, e.g. Claude) hand coding tasks to a cheaper AI on another
+machine (the **worker**, e.g. Cline), through git. The worker does the task, runs your tests and reports PASS or FAIL.
+The foreman checks the work and merges it.
 
-## 1. Set up a machine (once)
+Only short notes travel, on the `agent-comms` branch of your project's repo: the task text and the result.
+Never put passwords, keys or tokens in a task: notes are as public as the repo. Your AI's API key stays in that AI's
+own settings on the worker; Bigeon never reads it.
+
+In the commands below:
+
+- `<Bigeon>` is the folder where you cloned Bigeon, e.g. `C:\Users\you\work\Bigeon`.
+- `<project>` is your project's clone on that machine, e.g. `C:\Users\you\work\myproject`.
+- If you ran `npm link` in `<Bigeon>`, you can type `bigeon` instead of `node <Bigeon>/bin/bigeon.ts`.
+
+## The machines and their windows
+
+**Worker machine**
+
+- **The worker window**: the terminal where the worker loop runs. Do not type commands in it. Only press Ctrl+C
+  there (stop), or Esc (if it is paused, see section 7).
+- **A second terminal** (PowerShell on Windows): for every other command marked *worker machine*.
+
+**Foreman machine**
+
+- **Your AI assistant** (e.g. Claude Code), opened in `<project>`. It runs the bigeon commands for you.
+- **A terminal** in `<project>`: only if you want to run bigeon commands yourself (section 5).
+
+Foreman and worker can be the same machine, in two different folders.
+
+## 1. Set up (once per machine)
+
+*Worker machine and foreman machine, terminal:*
 
     git clone https://github.com/staystale/Bigeon.git
     cd <project>
     node <Bigeon>/bin/bigeon.ts init
 
-`init` creates `bigeon.config.json` (not committed) and adds it and `.bigeon/` to `.gitignore`.
-Set `checkCommand` in it (e.g. `npm run verify`, `pytest`). On the worker also set `workerCommand`, e.g.:
+`init` creates `bigeon.config.json` in `<project>` (never committed) and adds it and `.bigeon/` to `.gitignore`.
+Open that file and set:
 
-    "workerCommand": "cline --auto-approve true --timeout 600 \"The task and rules are provided on stdin. Carry out that task now, following the rules.\""
+- `checkCommand`: the command that tests your project, e.g. `npm run verify` or `pytest`. Exit 0 means PASS.
+- On the worker only, `workerCommand`: how to start the AI agent. It gets the task on its input. For the Cline CLI:
 
-Then test: `node <Bigeon>/bin/bigeon.ts check` must print PASS or FAIL.
+      "workerCommand": "cline --auto-approve true --timeout 600 \"The task and rules are provided on stdin. Carry out that task now, following the rules.\""
 
-## 2. Start a session
+Test it: `node <Bigeon>/bin/bigeon.ts check` must print PASS or FAIL.
 
-Worker machine (leave this window open):
+## 2. Start the worker
 
-    cd <Bigeon>
-    git pull
+*Worker machine, a new terminal (this becomes the worker window):*
+
     cd <project>
     node <Bigeon>/bin/bigeon.ts worker
 
-- `git pull` updates Bigeon. Do it, then restart the loop, whenever Bigeon changes.
-- The loop costs nothing while it waits; the agent only starts when a task arrives.
-- Stop it with Ctrl+C: it also stops the agent and marks itself "stopped".
-- Windows: if the window title starts with "Select", the loop is paused (clicking in a console window selects text and freezes the program). Press Esc in that window to let it continue.
-- "another bigeon worker is already running in this folder": close the other loop window first.
-- If the Cline desktop app is open on the worker, quit it (and its background service code-sidecar.exe) while the loop runs: the cline command then hands its work to that service, outside Bigeon's guard, so processes the agent starts can outlive it.
-- The loop prints the Bigeon version when it starts and says "UPDATE AVAILABLE" when there is one. To update: Ctrl+C, `git pull` in `<Bigeon>`, start it again. Bigeon never updates itself.
-- `bigeon status` on the foreman shows the same (the `Update:` line).
+- It prints `Bigeon <version> (up to date)`, then waits for a task. Leave the window open.
+- It costs nothing while it waits; the agent only starts when a task arrives.
+- If the Cline desktop app is open on the worker machine, quit it first, including its background service
+  `code-sidecar.exe`. Otherwise the cline command hands its work to that service, outside Bigeon's guard, and
+  programs the agent starts can keep running after it.
 
-**Optional: a start script.** Save the worker commands as a file you can double-click, or ask your AI assistant to make one for your folders. Windows, `Start Bigeon worker.cmd`:
+**Optional: a start script.** Save the start commands as a file you can double-click, or ask your AI assistant to make
+one for your folders. Windows, `Start Bigeon worker.cmd`:
 
     @echo off
     cd /d <project>
@@ -50,72 +75,107 @@ Linux/macOS, `start-bigeon-worker.sh` (then `chmod +x start-bigeon-worker.sh`):
     #!/bin/sh
     cd <project> && node <Bigeon>/bin/bigeon.ts worker
 
-It does not update Bigeon: when the loop says "UPDATE AVAILABLE", stop it, `git pull` in `<Bigeon>`, start it again.
+## 3. Stop or update the worker
 
-Foreman machine, check the worker is alive, then start the foreman:
+**Stop.** *Worker machine, worker window:* press Ctrl+C. It also stops the agent and tells the foreman it stopped.
 
-    cd <project>
+**Update.** When the worker window says `UPDATE AVAILABLE` (the foreman's `status` shows it too). Bigeon never
+updates itself:
+
+1. *Worker window:* press Ctrl+C.
+2. *Worker machine, terminal:*
+
+       cd <Bigeon>
+       git pull
+
+3. Start the worker again (section 2). It should now say `(up to date)`.
+
+## 4. Start the foreman
+
+*Foreman machine, terminal in `<project>`:* check the worker is alive:
+
     node <Bigeon>/bin/bigeon.ts status
 
-Tell the foreman AI: `Read <Bigeon>/docs/FOREMAN.md and act as the foreman. Use bigeon in this project.`
+Then open your AI assistant in `<project>` and tell it:
 
-## 3. Commands
+    Read <Bigeon>/docs/FOREMAN.md and act as the foreman. Use bigeon in this project.
 
-| Command | Who | What it does |
-|---|---|---|
-| `status` | foreman | Is the worker idle, busy or down? Shows the Bigeon version it runs. Exit 0 alive, 2 no status yet, 4 stopped or down |
-| `send task --text "..."` | foreman | Send a task (ids are automatic). `--file task.md` for long ones |
-| `watch results --timeout 30` | foreman | Wait up to 30 min for a result, checking git every 30 s (no tokens). Exit 0 got one, 2 nothing yet, 3 remote unreachable |
-| `watch results --once` | foreman | Check once, now |
-| `accept 41 --dry-run` | foreman | Show what accepting task 041 would do, without pushing |
-| `accept 41` | foreman | Push `worker/041` to main, only if: result PASS, branch unchanged since the result, based on the current main, and GitHub's check passed (waits up to 15 min). Exit 0 done, 1 refused (says why), 3 remote unreachable, 5 check still running |
-| `check` | either | Run `checkCommand`, print PASS or FAIL and the important lines |
-| `version` | either | Show this machine's Bigeon version and say when an update is available. Exit 0 |
-| `worker` | worker | The loop: wait, run the agent, check, retry up to `maxTries`, report |
+From then on, tell it what you want done. It writes the tasks, waits for results, checks the work and merges it.
 
-Before accepting, look at the change: `git fetch origin` then `git diff origin/main origin/worker/041`.
+## 5. Commands
 
-## 4. Reading a result
+*Foreman machine, terminal in `<project>`.* Your AI foreman normally runs these for you.
+
+- `node <Bigeon>/bin/bigeon.ts status`
+  Is the worker idle, working or down? Also shows its Bigeon version and whether it needs an update.
+  Exit 0 alive, 2 no status yet, 4 stopped or down.
+- `node <Bigeon>/bin/bigeon.ts send task --file task.md`
+  Send a task (ids are automatic). `--text "..."` for a short one.
+- `node <Bigeon>/bin/bigeon.ts watch results --timeout 30`
+  Wait up to 30 minutes for the next result, checking git every 30 seconds (no AI tokens used).
+  `--once` checks once, now. Exit 0 got one, 2 nothing yet, 3 remote unreachable.
+- `node <Bigeon>/bin/bigeon.ts accept 41 --dry-run`
+  Show what merging task 041 would do. Without `--dry-run` it pushes `worker/041` to main, but only if the result
+  is PASS, the branch is unchanged since, it is based on the current main and GitHub's check passed (waits up to
+  15 min). Exit 0 done, 1 refused (says why), 3 remote unreachable, 5 check still running.
+  Look at the change first: `git fetch origin` then `git diff origin/main origin/worker/041`.
+
+*Either machine, terminal in `<project>`:*
+
+- `node <Bigeon>/bin/bigeon.ts version`: this machine's Bigeon version, and whether an update is available.
+- `node <Bigeon>/bin/bigeon.ts check`: run `checkCommand`, print PASS or FAIL and the important lines.
+
+## 6. Reading a result
 
     Status:  PASS or FAIL, from the loop's own check (not the agent's word)
     Commit:  the commit the worker ended on
     Tries:   attempts used
     Errors:  (FAIL only) the lines around the failure
     Summary: how the agent ended, e.g. "worker agent exit 0"
-    Base:    the main commit the work started from. "WARNING N commit(s) behind": do not accept, send the task again
+    Base:    the main commit the work started from. "WARNING N commit(s) behind": do not accept, send it again
     Dirty:   files left uncommitted in the worker's folder (reported only, never touched)
-    Stashed: leftovers from a crashed run were set aside (worker machine: git stash list)
+    Stashed: leftovers from a crashed run were set aside (see section 7)
     Worker said: the agent's last lines
 
-## 5. When something goes wrong
 
-| You see | Do this |
-|---|---|
-| `status` says "seems down" or "stopped" | Start the loop on the worker machine |
-| `status` says "no worker status yet" | The worker runs an old Bigeon: `git pull` in `<Bigeon>` there, restart the loop |
-| `Base: ... WARNING ... behind` | Do not accept; send the same task again from the current main |
-| `accept` refused | Read its one-line reason; fix that, or send a new task |
-| "cannot reach origin" | Check the network or GitHub sign-in; the loop keeps retrying on its own |
-| Work lost after a crash? | On the worker: `git stash list`, then `git stash apply stash@{0}`. Nothing is ever deleted |
+## 7. When something goes wrong
 
-## 6. What keeps it safe
+- **The worker window's title starts with "Select"** (Windows). *Worker window:* press Esc. Clicking in a console
+  window selects text and pauses the program in it.
+- **`status` says "seems down" or "stopped".** *Worker machine:* look at the worker window. If it is closed, start
+  the worker (section 2).
+- **"another bigeon worker is already running in this folder".** *Worker machine:* a loop is already open there.
+  Close the other worker window first.
+- **`status` says "no worker status yet".** The worker runs an old Bigeon: update it (section 3).
+- **A result says `Base: ... WARNING ... behind`.** Do not accept it; send the same task again.
+- **`accept` refused.** Read its one-line reason; fix that, or send a new task.
+- **"cannot reach origin".** Check the network or your GitHub sign-in. The loop keeps retrying by itself.
+- **Programs left running after a task** (Windows). *Worker machine, PowerShell:*
+
+      Get-CimInstance Win32_Process -Filter "name='node.exe'" | Select-Object ProcessId, CommandLine
+
+  Only the `bigeon.ts worker` line should be there. If there are more, check the Cline desktop app is closed (section
+  2), and stop an extra one with `Stop-Process -Id <ProcessId>`.
+- **Work lost after a crash.** Nothing is ever deleted. *Worker machine, terminal in `<project>`:* `git stash list`,
+  then `git stash apply stash@{0}`.
+
+## 8. What keeps it safe
 
 - One worker loop per folder.
 - A task that crashes the loop more than `maxTries` times is reported as FAIL, not retried forever.
-- The agent runs under a guard (a Job Object on Windows, a watched process group elsewhere): when the loop stops,
-  the agent and everything it started is killed within about a second.
+- The agent runs under a guard (a Job Object on Windows, a watched process group elsewhere): when the agent finishes
+  or the loop stops, the agent and everything it started are stopped within about a second.
 - Only the foreman moves code to main, and `accept` refuses anything unchecked or out of date.
 
-## 7. Settings (`bigeon.config.json`)
+## 9. Settings (`bigeon.config.json`)
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `checkCommand` | | What decides PASS (exit 0) or FAIL |
-| `workerCommand` | | Worker only: how the agent is started (it gets the task on stdin) |
-| `pollSeconds` | 30 | How often git is checked |
-| `maxTries` | 3 | Attempts per task |
-| `errorLines` | 20 | Lines shown on FAIL |
-| `heartbeatMinutes` | 10 | How often the worker says it is alive (0 = off) |
-| `checkTimeoutSeconds` | 300 | Stop a stuck check after this |
-| `workerTimeoutSeconds` | 900 | Stop a stuck agent after this |
-| `remote`, `commsBranch` | origin, agent-comms | Where the notes travel |
+- `checkCommand`: what decides PASS (exit 0) or FAIL.
+- `workerCommand`: worker only. How the agent is started (it gets the task on its input).
+- `pollSeconds` (default 30): how often git is checked.
+- `maxTries` (3): attempts per task.
+- `errorLines` (20): lines shown on FAIL.
+- `heartbeatMinutes` (10): how often the worker tells the foreman it is alive (0 = off).
+- `checkTimeoutSeconds` (300): stop a stuck check after this.
+- `workerTimeoutSeconds` (900): stop a stuck agent after this.
+- `remote`, `commsBranch` (origin, agent-comms): where the notes travel.
+
