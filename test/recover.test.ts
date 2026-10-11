@@ -146,7 +146,7 @@ test('a stale lock is taken over', () => {
   assert.equal(fs.existsSync(path.join(worker, '.bigeon', 'worker.lock')), false);
 });
 
-test(process.platform === 'win32' ? 'the agent dies with the worker' : 'a leftover agent from a crash is stopped on restart', async () => {
+test('the agent dies with the worker', async () => {
   const { foreman, worker } = setupPair('bigeon-leftover-');
   setConfig(worker, { workerTimeoutSeconds: 60 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
@@ -168,19 +168,10 @@ test(process.platform === 'win32' ? 'the agent dies with the worker' : 'a leftov
     const grandchildPid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
     pids.push(agentPid, grandchildPid);
 
-    if (process.platform === 'win32') {
-      // The Job Object kills them as soon as the worker is gone; no restart needed.
-      assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the worker died');
-      assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the worker died');
-    } else {
-      fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
-      const again = run('node', [cli, 'worker', '--once'], worker);
-      assert.equal(again.status, 0, again.stderr + again.stdout);
-      assert.match(again.stdout, /stopped leftover agent/);
-
-      assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the restart');
-      assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the restart');
-    }  } finally {
+    // The guard kills them as soon as the worker is gone; no restart needed.
+    assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the worker died');
+    assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the worker died');
+  } finally {
     for (const pid of pids) {
       try {
         process.kill(pid, 'SIGKILL');
@@ -191,13 +182,13 @@ test(process.platform === 'win32' ? 'the agent dies with the worker' : 'a leftov
   }
 });
 
-test('leftover processes are killed when the agent finishes', { skip: process.platform !== 'win32' }, async () => {
+test('leftover processes are killed when the agent finishes', async () => {
   const { foreman, worker } = setupPair('bigeon-jobend-');
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
   fs.writeFileSync(
     path.join(worker, 'agent.js'),
     "const { spawn } = require('child_process');\n" +
-      "const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', detached: true });\n" +
+      `const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', detached: ${process.platform === 'win32'} });\n` +
       "require('fs').writeFileSync('gc.pid', String(c.pid));\n" +
       'process.exit(0);\n',
   );

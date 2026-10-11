@@ -47,7 +47,7 @@ Stashed: present when leftovers from an interrupted run were stashed (worker loo
 - One loop per folder: `bigeon worker` holds `.bigeon/worker.lock`. A second loop refuses to start; a lock left by a dead loop is taken over.
 - A task interrupted more than `maxTries` times is reported as FAIL ("interrupted N times, giving up") instead of being retried forever.
 - After a crash, leftover changes are stashed (`git stash list`), never deleted, and the result says so.
-- On Windows the agent runs in a Job Object, so Windows kills it and everything it started as soon as the worker stops. Elsewhere the agent left running after a crash is stopped on restart (until part 2). Process ids from before a machine restart are never stopped.
+- The agent runs under a guard on every platform (a Job Object on Windows, a process group watched by a guard elsewhere), so it and everything it started is killed as soon as the worker stops. A leftover found on restart is only stopped if its start time still matches. Process ids from before a machine restart are never stopped.
 
 ## Token rules
 

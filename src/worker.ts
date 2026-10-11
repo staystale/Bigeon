@@ -116,6 +116,12 @@ function isRunning(pid: number): boolean {
 
 let runningAgent: ChildProcess | null = null;
 
+// Stop the agent: on Windows kill its tree; elsewhere ask the guard, which kills the agent's process group.
+function stopAgent(child: ChildProcess): void {
+  if (process.platform === 'win32') killTree(child);
+  else child.kill('SIGTERM');
+}
+
 // Run the agent, show its output live, and keep the last lines for the result note.
 function runAgent(
   projectDir: string,
@@ -136,19 +142,19 @@ function runAgent(
         String(process.pid),
         Buffer.from(config.workerCommand, 'utf8').toString('base64'),
       ], { cwd: projectDir, shell: false, stdio: ['pipe', 'pipe', 'pipe'] })
-      : spawn(config.workerCommand, {
-        cwd: projectDir,
-        shell: true,
-        detached: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      // Elsewhere the guard keeps the agent in its own process group and kills it when the worker is gone.
+      : spawn(process.execPath, [
+        fileURLToPath(new URL('./guard-posix.ts', import.meta.url)),
+        String(process.pid),
+        Buffer.from(config.workerCommand, 'utf8').toString('base64'),
+      ], { cwd: projectDir, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     runningAgent = child;
     if (child.pid !== undefined) onSpawn(child.pid);
     let captured = '';
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree(child);
+      stopAgent(child);
     }, config.workerTimeoutSeconds * 1000);
     const forward = (stream: NodeJS.ReadableStream, target: NodeJS.WritableStream) => stream.on('data', (chunk: Buffer | string) => {
       target.write(chunk);
@@ -415,7 +421,8 @@ async function runLoop(
             log(`[bigeon] not stopping pid ${leftoverPid}: it is a different process now`);
           } else {
             try {
-              killPid(leftoverPid);
+              if (process.platform === 'win32') killPid(leftoverPid);
+              else process.kill(leftoverPid, 'SIGTERM');
             } catch {
               // already gone
             }
@@ -509,7 +516,7 @@ export async function runWorker(
   };
   const status = makeStatusReporter(projectDir, config, bigeonPath);
   const onSignal = (): void => {
-    if (runningAgent) killTree(runningAgent);
+    if (runningAgent) stopAgent(runningAgent);
     stopRunningCheck();
     status.publish('stopped');
     removeLock();
