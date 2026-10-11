@@ -18,8 +18,8 @@ Our own setup. The general rules are in [FOREMAN.md](FOREMAN.md), [WORKER.md](WO
 
 | Role | Machine | Runs |
 |---|---|---|
-| Foreman | Laptop (`<laptop home>`) | Foreman agent. `bigeon send task`, `bigeon watch results`, reviews, moves passing work to `main` |
-| Worker | Worker PC (`<worker home>`) | `bigeon worker` in a visible terminal so the human can watch. It starts the Cline CLI for each task |
+| Foreman | Laptop | Foreman agent. `bigeon send task`, `bigeon watch results`, reviews, moves passing work to `main` |
+| Worker | Worker PC | `bigeon worker` in a visible terminal so the human can watch. It starts the Cline CLI for each task |
 | Human | Either | Sets the goal, approves major steps, keeps the worker window open |
 
 ## Any repo works
@@ -45,7 +45,7 @@ Both machines: Node 22.18+ (we use 24), git, and a GitHub sign-in that can push 
 
 Worker PC:
 ```
-cd <worker home>\work
+cd <work folder>
 git clone https://github.com/<owner>/<project>.git
 cd <project>
 node ..\Bigeon\bin\bigeon.ts init
