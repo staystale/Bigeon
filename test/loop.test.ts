@@ -60,3 +60,17 @@ test('foreman sends a task, worker fails then passes, foreman reads results', ()
   // Second task gets the next id.
   assert.match(bigeon(foreman, 'send', 'task', '--text', 'next').stdout, /Sent task 002/);
 });
+
+test('send rejects a non-numeric note id and creates no note', () => {
+  const { root, remote } = setupRemote('bigeon-');
+  const foreman = makeClone(root, remote, 'foreman');
+  bigeon(foreman, 'init');
+
+  const bad = bigeon(foreman, 'send', 'task', 'abc', '--text', 'hi');
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /note id must be a number/);
+
+  // No note was created, so the next task still gets id 001.
+  assert.match(bigeon(foreman, 'send', 'task', '--text', 'next').stdout, /Sent task 001/);
+});
+

@@ -33,6 +33,7 @@ Worker machine (leave this window open):
 - The loop costs nothing while it waits; the agent only starts when a task arrives.
 - Stop it with Ctrl+C: it also stops the agent and marks itself "stopped".
 - "another bigeon worker is already running in this folder": close the other loop window first.
+- If the Cline desktop app is open on the worker, quit it (and its background service code-sidecar.exe) while the loop runs: the cline command then hands its work to that service, outside Bigeon's guard, so processes the agent starts can outlive it.
 - The loop prints the Bigeon version when it starts and says "UPDATE AVAILABLE" when there is one. To update: Ctrl+C, `git pull` in `<Bigeon>`, start it again. Bigeon never updates itself.
 - `bigeon status` on the foreman shows the same (the `Update:` line).
 

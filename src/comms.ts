@@ -117,6 +117,9 @@ export function sendNote(
   id: string | number | null | undefined,
   text: string,
 ): string {
+  if (id && !/^\d+$/.test(String(id))) {
+    throw new Error(`note id must be a number, e.g. 043 (got "${id}")`);
+  }
   const dir = ensureComms(projectDir, config);
   pullComms(dir, config);
   const folder = folderFor(kind);
