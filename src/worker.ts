@@ -283,10 +283,25 @@ export function baseLine(projectDir: string, config: Config): string | null {
   return `Base: ${base.out}, WARNING ${behindCount.out} commit(s) behind ${main}`;
 }
 
+// One line listing uncommitted files in the folder (report only, never touched); null if none or git fails.
+export function dirtyLine(projectDir: string): string | null {
+  const status = git(['status', '--porcelain'], projectDir);
+  if (!status.ok || !status.out) return null;
+  // git() trims its output, which can eat the first line's leading space, so the status is 1-2 characters here.
+  const paths = status.out
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => line.replace(/^[ MADRCU?!]{1,2} /, ''));
+  const n = paths.length;
+  return `Dirty: ${n} uncommitted file(s) (${paths.slice(0, 5).join(', ')}${n > 5 ? ', ...' : ''})`;
+}
+
 function extraLinesFor(projectDir: string, config: Config, stashed: boolean): string[] | undefined {
   const lines: string[] = [];
   const base = baseLine(projectDir, config);
   if (base) lines.push(base);
+  const dirty = dirtyLine(projectDir);
+  if (dirty) lines.push(dirty);
   if (stashed) lines.push(STASH_NOTE);
   return lines.length > 0 ? lines : undefined;
 }

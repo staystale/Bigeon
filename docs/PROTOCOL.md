@@ -27,6 +27,7 @@ Tries:   attempts used
 Errors:  first N lines (FAIL only)
 Summary: two or three lines
 Base:    main commit the work is based on; WARNING N commit(s) behind when stale (worker loop only)
+Dirty:   uncommitted files left in the worker's folder, if any (worker loop only, never touched)
 Stashed: present when leftovers from an interrupted run were stashed (worker loop only)
 ```
 

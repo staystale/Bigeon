@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { cli, run, setupPair as sharedSetupPair, setConfig, killTree, waitGone } from './helpers.ts';
+import { dirtyLine } from '../src/worker.ts';
 
 const HANG = "setInterval(()=>{},1000);\n";
 
@@ -252,6 +253,36 @@ test('the result says the base is up to date', () => {
   const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
   assert.match(result.stdout, /Base: \w+ \(up to date with origin\/main\)/);
 });
+test('the result lists files left uncommitted', () => {
+  const { foreman, worker } = setupPair('bigeon-dirty-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), "require('fs').writeFileSync('junk.txt','x');");
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.match(result.stdout, /Dirty: 1 uncommitted file\(s\) \(junk\.txt\)/);
+  assert.equal(fs.existsSync(path.join(worker, 'junk.txt')), true);
+});
+
+test('a clean folder has no Dirty line', () => {
+  const { foreman, worker } = setupPair('bigeon-clean-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: anything'], foreman).status, 0);
+  const out = run('node', [cli, 'worker', '--once'], worker);
+  assert.equal(out.status, 0, out.stderr + out.stdout);
+  const result = run('node', [cli, 'watch', 'results', '--once'], foreman);
+  assert.doesNotMatch(result.stdout, /Dirty:/);
+});
+
+test('dirtyLine shortens a long list', () => {
+  const { worker } = setupPair('bigeon-dirtyunit-');
+  for (let i = 1; i <= 7; i++) fs.writeFileSync(path.join(worker, `f${i}.txt`), 'x');
+  assert.match(dirtyLine(worker) ?? '', /Dirty: 7 uncommitted file\(s\) \(.+, \.\.\.\)/);
+});
+
+
 
 test('the result warns when the base is behind main', () => {
   const { foreman, worker } = setupPair('bigeon-basebehind-');
