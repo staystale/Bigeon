@@ -300,15 +300,14 @@ async function sendResult(
 
 type StatusReporter = {
   setUpdate: (update: BigeonUpdate) => void;
-  version: string;
   publish: (state: string) => void;
   heartbeat: () => void;
   startBeat: () => NodeJS.Timeout | undefined;
 };
 
 // Writes the worker status when the state changes and again every heartbeatMinutes. Writes nothing when heartbeatMinutes is 0.
-function makeStatusReporter(projectDir: string, config: Config, bigeonPath: string): StatusReporter {
-  let update = bigeonUpdate(path.dirname(path.dirname(bigeonPath)));
+function makeStatusReporter(projectDir: string, config: Config): StatusReporter {
+  let update: BigeonUpdate = { version: 'unknown', behind: null };
   const intervalMs = config.heartbeatMinutes * 60000;
   let state = '';
   let since = '';
@@ -327,9 +326,6 @@ function makeStatusReporter(projectDir: string, config: Config, bigeonPath: stri
   return {
     setUpdate: (next: BigeonUpdate): void => {
       update = next;
-    },
-    get version(): string {
-      return update.version;
     },
     publish: (next: string): void => {
       if (intervalMs <= 0) return;
@@ -535,7 +531,7 @@ export async function runWorker(
   const removeLock = (): void => {
     fs.rmSync(lockPath, { force: true });
   };
-  const status = makeStatusReporter(projectDir, config, bigeonPath);
+  const status = makeStatusReporter(projectDir, config);
   const onSignal = (): void => {
     if (runningAgent) stopAgent(runningAgent);
     stopRunningCheck();
