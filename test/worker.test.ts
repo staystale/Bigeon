@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { cli, run, makeClone, setupRemote, setupPair, killTree, waitGone } from './helpers.ts';
-import { workerPrompt, descendants, repairMojibake, agentTail, mergeStarts, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
+import { workerPrompt, repairMojibake, agentTail, CP437_HIGH, CP850_HIGH } from '../src/worker.ts';
 import { loadConfig } from '../src/lib.ts';
 
 test('worker command runs the agent with the task on stdin, then reports the check result', () => {
@@ -172,18 +172,6 @@ test('agentTail repairs garbled lines', () => {
   assert.deepEqual(agentTail('Γä╣ pass 3\n'), ['ℹ pass 3']);
 });
 
-test('descendants: walks a simple tree and never returns the root', () => {
-  const pairs: Array<[number, number]> = [[11, 10], [12, 11], [13, 10], [99, 98]];
-  assert.deepEqual(descendants(10, pairs, []), [11, 12, 13]);
-  assert.deepEqual(descendants(10, pairs, [10]), [11, 12, 13]);
-});
-
-test('descendants: a known process stays listed after its parent is gone, with its children', () => {
-  const pairs: Array<[number, number]> = [[21, 5], [22, 21]];
-  assert.deepEqual(descendants(10, pairs, [20, 21]), [20, 21, 22]);
-  assert.deepEqual(descendants(10, [[31, 20]], [20]), [20, 31]);
-});
-
 test('a check timeout stops the whole check tree', async () => {
   const { root, remote } = setupRemote('bigeon-checktimeout-');
   const dir = makeClone(root, remote, 'proj');
@@ -274,9 +262,3 @@ test('Ctrl+C during a check stops the check processes', { skip: process.platform
   }
 });
 
-test('mergeStarts keeps entries for exited pids, never overwrites, and adds new pids', () => {
-  const known = { '10': '100', '11': '110' };
-  const merged = mergeStarts(known, new Map([[11, '999'], [12, '120']]), [10, 11, 12, 13]);
-  assert.deepEqual(merged, { '10': '100', '11': '110', '12': '120' });
-  assert.deepEqual(known, { '10': '100', '11': '110' });
-});

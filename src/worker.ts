@@ -1,7 +1,8 @@
 // Bigeon worker loop: wait for a task, hand it to the worker agent (visible in this terminal),
 // run the check, retry on failure, and send one result note back. Reporting is done here so a
 // result always goes back, even if the agent crashes.
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import type { ChildProcess } from 'node:child_process';
 import type { Config, WorkerOptions, AgentRun, CheckResult, Note } from './types.ts';
 import fs from 'node:fs';
@@ -72,7 +73,7 @@ export function workerPrompt(
 }
 
 // The id of the task a previous run left unfinished, or '' when there is no (readable) marker.
-type Marker = { id: string; agentPid: number | null; agentPids: number[]; attempts: number; bootTime: number; agentStarts: Record<string, string> };
+type Marker = { id: string; agentPid: number | null; attempts: number; bootTime: number; agentStarts: Record<string, string> };
 
 function readMarker(markerPath: string): Marker {
   try {
@@ -81,22 +82,18 @@ function readMarker(markerPath: string): Marker {
       const agentPid = 'agentPid' in parsed && typeof parsed.agentPid === 'number' ? parsed.agentPid : null;
       const attempts = 'attempts' in parsed && typeof parsed.attempts === 'number' ? parsed.attempts : 0;
       const markerBoot = 'bootTime' in parsed && typeof parsed.bootTime === 'number' ? parsed.bootTime : 0;
-      const agentPids =
-        'agentPids' in parsed && Array.isArray(parsed.agentPids)
-          ? parsed.agentPids.filter((value): value is number => typeof value === 'number')
-          : [];
       const agentStarts: Record<string, string> = {};
       if ('agentStarts' in parsed && typeof parsed.agentStarts === 'object' && parsed.agentStarts !== null) {
         for (const [key, value] of Object.entries(parsed.agentStarts)) {
           if (typeof value === 'string') agentStarts[key] = value;
         }
       }
-      return { id: parsed.id, agentPid, agentPids, attempts, bootTime: markerBoot, agentStarts };
+      return { id: parsed.id, agentPid, attempts, bootTime: markerBoot, agentStarts };
     }
   } catch {
     // missing or unreadable marker: treat as no interruption
   }
-  return { id: '', agentPid: null, agentPids: [], attempts: 0, bootTime: 0, agentStarts: {} };
+  return { id: '', agentPid: null, attempts: 0, bootTime: 0, agentStarts: {} };
 }
 
 // When this machine started; differs by a lot after a restart.
@@ -104,8 +101,8 @@ function bootTime(): number {
   return Date.now() - os.uptime() * 1000;
 }
 
-function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentPids: number[] = [], agentStarts: Record<string, string> = {}): void {
-  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, agentPids, attempts, bootTime: bootTime(), agentStarts }));
+function writeMarker(markerPath: string, id: string, agentPid: number | null, attempts: number, agentStarts: Record<string, string> = {}): void {
+  fs.writeFileSync(markerPath, JSON.stringify({ id, agentPid, attempts, bootTime: bootTime(), agentStarts }));
 }
 
 function isRunning(pid: number): boolean {
@@ -119,43 +116,32 @@ function isRunning(pid: number): boolean {
 
 let runningAgent: ChildProcess | null = null;
 
-// Every process under rootPid, plus the already known ones and their children (a process whose parent
-// exited stays listed). Sorted, never rootPid.
-export function descendants(rootPid: number, pairs: Array<[pid: number, parent: number]>, known: number[]): number[] {
-  const children = new Map<number, number[]>();
-  for (const [pid, parent] of pairs) {
-    const list = children.get(parent);
-    if (list) list.push(pid);
-    else children.set(parent, [pid]);
-  }
-  const found = new Set<number>(known.filter((pid) => pid !== rootPid));
-  const queue = [rootPid, ...found];
-  while (queue.length > 0) {
-    for (const pid of children.get(queue.pop() as number) ?? []) {
-      if (pid !== rootPid && !found.has(pid)) {
-        found.add(pid);
-        queue.push(pid);
-      }
-    }
-  }
-  return [...found].sort((a, b) => a - b);
-}
-
 // Run the agent, show its output live, and keep the last lines for the result note.
 function runAgent(
   projectDir: string,
   config: Config,
   prompt: string,
   onSpawn: (pid: number) => void,
-  onTree: (pids: number[], starts: Record<string, string>) => void,
 ): Promise<AgentRun> {
   return new Promise<AgentRun>((resolve) => {
-    const child = spawn(config.workerCommand, {
-      cwd: projectDir,
-      shell: true,
-      detached: process.platform !== 'win32',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    // On Windows the guard puts the agent in a Job Object: Windows kills it and all it started when the worker stops.
+    const child = process.platform === 'win32'
+      ? spawn('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        fileURLToPath(new URL('./guard-win.ps1', import.meta.url)),
+        String(process.pid),
+        Buffer.from(config.workerCommand, 'utf8').toString('base64'),
+      ], { cwd: projectDir, shell: false, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(config.workerCommand, {
+        cwd: projectDir,
+        shell: true,
+        detached: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
     runningAgent = child;
     if (child.pid !== undefined) onSpawn(child.pid);
     let captured = '';
@@ -173,53 +159,8 @@ function runAgent(
     child.on('error', (error: Error) => {
       captured += `\n${error.message}\n`;
     });
-    let exited = false;
-    let snapshotTimer: NodeJS.Timeout | undefined;
-    let knownPids: number[] = [];
-    let knownStarts: Record<string, string> = {};
-    const rootPid = child.pid;
-    if (process.platform === 'win32' && rootPid !== undefined) {
-      const snapshot = (): void => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToFileTimeUtc())" }',
-          ],
-          { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
-          (error, stdout) => {
-            if (exited || error) return;
-            const pairs: Array<[number, number]> = [];
-            const startOf = new Map<number, string>();
-            for (const line of stdout.split(/\r?\n/)) {
-              const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line);
-              if (match) {
-                pairs.push([Number(match[1]), Number(match[2])]);
-                startOf.set(Number(match[1]), match[3] as string);
-              }
-            }
-            const pids = descendants(rootPid, pairs, knownPids);
-            const before = Object.keys(knownStarts).length;
-            knownStarts = mergeStarts(knownStarts, startOf, [rootPid, ...pids]);
-            const grew = Object.keys(knownStarts).length > before;
-            if (pids.length === knownPids.length && pids.every((pid, index) => pid === knownPids[index]) && !grew) return;
-            knownPids = pids;
-            onTree(pids, knownStarts);
-          },
-        );
-      };
-      snapshotTimer = setTimeout(function tick() {
-        if (exited) return;
-        snapshot();
-        snapshotTimer = setTimeout(tick, 3000);
-      }, 1000);
-    }
     child.on('close', (code) => {
-      exited = true;
       runningAgent = null;
-      if (snapshotTimer) clearTimeout(snapshotTimer);
       clearTimeout(timer);
       resolve({ exitText: timedOut ? 'timed out' : `exit ${code}`, output: captured });
     });
@@ -468,23 +409,19 @@ async function runLoop(
       if (Math.abs(marker.bootTime - bootTime()) >= 60000) {
         log(`[bigeon] machine restarted since the interrupted run, not stopping old pid ${leftoverPid}`);
       } else {
-        const stopped: number[] = [];
-        const current = processStartTimes([leftoverPid, ...marker.agentPids]);
-        for (const pid of [leftoverPid, ...marker.agentPids]) {
-          if (!isRunning(pid)) continue;
-          const recorded = marker.agentStarts[String(pid)];
-          if (recorded !== undefined && current.get(pid) !== recorded) {
-            log(`[bigeon] not stopping pid ${pid}: it is a different process now`);
-            continue;
+        if (isRunning(leftoverPid)) {
+          const recorded = marker.agentStarts[String(leftoverPid)];
+          if (recorded !== undefined && processStartTimes([leftoverPid]).get(leftoverPid) !== recorded) {
+            log(`[bigeon] not stopping pid ${leftoverPid}: it is a different process now`);
+          } else {
+            try {
+              killPid(leftoverPid);
+            } catch {
+              // already gone
+            }
+            log(`[bigeon] stopped leftover agent ${leftoverPid} from an interrupted run`);
           }
-          try {
-            killPid(pid);
-          } catch {
-            // already gone
-          }
-          stopped.push(pid);
         }
-        if (stopped.length > 0) log(`[bigeon] stopped leftover agent ${stopped.join(', ')} from an interrupted run`);
       }
     }
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -515,22 +452,13 @@ async function runLoop(
       tries += 1;
       log(`[bigeon] starting worker agent (try ${tries} of ${config.maxTries})...`);
       const taskId = note.id;
-      let agentPid: number | null = null;
-      let agentStarts: Record<string, string> = {};
       status.publish(`working on ${taskId} (try ${tries} of ${config.maxTries})`);
       const beat = status.startBeat();
       let run: AgentRun;
       try {
         run = await runAgent(projectDir, config, workerPrompt(bigeonPath, config, note.id, note.text, previousFailure), (pid) => {
-          agentPid = pid;
-          if (process.platform !== 'win32') {
-            const start = processStartTimes([pid]).get(pid);
-            if (start !== undefined) agentStarts = { [String(pid)]: start };
-          }
-          writeMarker(markerPath, taskId, pid, attempts, [], agentStarts);
-        }, (pids, starts) => {
-          agentStarts = starts;
-          writeMarker(markerPath, taskId, agentPid, attempts, pids, agentStarts);
+          const start = processStartTimes([pid]).get(pid);
+          writeMarker(markerPath, taskId, pid, attempts, start === undefined ? {} : { [String(pid)]: start });
         });
       } finally {
         clearInterval(beat);
@@ -597,14 +525,4 @@ export async function runWorker(
     process.off('SIGTERM', onSignal);
     removeLock();
   }
-}
-
-/** Adds start times for pids not yet recorded; never removes or overwrites an entry. */
-export function mergeStarts(known: Record<string, string>, seen: Map<number, string>, pids: number[]): Record<string, string> {
-  const merged = { ...known };
-  for (const pid of pids) {
-    const start = seen.get(pid);
-    if (start !== undefined && merged[String(pid)] === undefined) merged[String(pid)] = start;
-  }
-  return merged;
 }

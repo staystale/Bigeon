@@ -26,7 +26,7 @@ function setupPair(prefix: string): { root: string; foreman: string; worker: str
 }
 
 // Simulated crash: the worker is killed before it can report anything.
-async function crashWorker(worker: string, foreman: string, killAgent = true, ready?: () => boolean): Promise<void> {
+async function crashWorker(worker: string, foreman: string, killAgent = true): Promise<void> {
   const child = spawn('node', [cli, 'worker', '--once'], { cwd: worker, detached: process.platform !== 'win32', stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   const started = path.join(worker, 'started.txt');
@@ -35,19 +35,11 @@ async function crashWorker(worker: string, foreman: string, killAgent = true, re
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const appeared = fs.existsSync(started);
-  let isReady = true;
-  if (ready) {
-    while (!ready() && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    isReady = ready();
-  }
   // killAgent false: only the worker dies, so its agent is left running like a real crash.
   if (killAgent) killTree(child.pid as number);
   else child.kill('SIGKILL');
   await exited;
   assert.equal(appeared, true, 'agent never wrote started.txt');
-  assert.equal(isReady, true, 'crash condition never became ready');
   assert.equal(run('node', [cli, 'watch', 'results', '--once'], foreman).status, 2);
 }
 
@@ -154,7 +146,7 @@ test('a stale lock is taken over', () => {
   assert.equal(fs.existsSync(path.join(worker, '.bigeon', 'worker.lock')), false);
 });
 
-test('a leftover agent from a crash is stopped on restart', async () => {
+test(process.platform === 'win32' ? 'the agent dies with the worker' : 'a leftover agent from a crash is stopped on restart', async () => {
   const { foreman, worker } = setupPair('bigeon-leftover-');
   setConfig(worker, { workerTimeoutSeconds: 60 });
   fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
@@ -171,30 +163,24 @@ test('a leftover agent from a crash is stopped on restart', async () => {
 
   const pids: number[] = [];
   try {
-    // On Windows wait until the marker has recorded the agent's process tree.
-    const treeRecorded = (): boolean => {
-      try {
-        const marker: unknown = JSON.parse(fs.readFileSync(path.join(worker, '.bigeon', 'in-progress.json'), 'utf8'));
-        const recorded = (marker as { agentPids?: unknown }).agentPids;
-        const agent = Number(fs.readFileSync(path.join(worker, 'agent.pid'), 'utf8'));
-        return Array.isArray(recorded) && recorded.includes(agent);
-      } catch {
-        return false;
-      }
-    };
-    await crashWorker(worker, foreman, false, process.platform === 'win32' ? treeRecorded : undefined);
+    await crashWorker(worker, foreman, false);
     const agentPid = Number(fs.readFileSync(path.join(worker, 'agent.pid'), 'utf8'));
     const grandchildPid = Number(fs.readFileSync(path.join(worker, 'grandchild.pid'), 'utf8'));
     pids.push(agentPid, grandchildPid);
 
-    fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
-    const again = run('node', [cli, 'worker', '--once'], worker);
-    assert.equal(again.status, 0, again.stderr + again.stdout);
-    assert.match(again.stdout, /stopped leftover agent/);
+    if (process.platform === 'win32') {
+      // The Job Object kills them as soon as the worker is gone; no restart needed.
+      assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the worker died');
+      assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the worker died');
+    } else {
+      fs.writeFileSync(path.join(worker, 'agent.js'), 'process.exit(0);');
+      const again = run('node', [cli, 'worker', '--once'], worker);
+      assert.equal(again.status, 0, again.stderr + again.stdout);
+      assert.match(again.stdout, /stopped leftover agent/);
 
-    assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the restart');
-    assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the restart');
-  } finally {
+      assert.equal(await waitGone(agentPid, 5000), true, 'agent process was still running after the restart');
+      assert.equal(await waitGone(grandchildPid, 5000), true, 'grandchild process was still running after the restart');
+    }  } finally {
     for (const pid of pids) {
       try {
         process.kill(pid, 'SIGKILL');
@@ -202,6 +188,28 @@ test('a leftover agent from a crash is stopped on restart', async () => {
         // already gone
       }
     }
+  }
+});
+
+test('leftover processes are killed when the agent finishes', { skip: process.platform !== 'win32' }, async () => {
+  const { foreman, worker } = setupPair('bigeon-jobend-');
+  fs.writeFileSync(path.join(worker, 'check.js'), 'process.exit(0);');
+  fs.writeFileSync(
+    path.join(worker, 'agent.js'),
+    "const { spawn } = require('child_process');\n" +
+      "const c = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', detached: true });\n" +
+      "require('fs').writeFileSync('gc.pid', String(c.pid));\n" +
+      'process.exit(0);\n',
+  );
+  assert.equal(run('node', [cli, 'send', 'task', '--text', 'Goal: nothing'], foreman).status, 0);
+  let gcPid = 0;
+  try {
+    const out = run('node', [cli, 'worker', '--once'], worker);
+    assert.equal(out.status, 0, out.stderr + out.stdout);
+    gcPid = Number(fs.readFileSync(path.join(worker, 'gc.pid'), 'utf8'));
+    assert.equal(await waitGone(gcPid, 5000), true, 'leftover process was still running after the agent finished');
+  } finally {
+    if (gcPid > 0) killTree(gcPid);
   }
 });
 
@@ -219,7 +227,6 @@ test('a reused pid is not stopped', async () => {
       JSON.stringify({
         id: '001',
         agentPid: pid,
-        agentPids: [],
         attempts: 1,
         bootTime: Date.now() - os.uptime() * 1000,
         agentStarts: { [String(pid)]: '1' },
